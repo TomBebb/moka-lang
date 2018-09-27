@@ -2,11 +2,23 @@ open Ast
 open Token
 open Type
 
+
+type error_kind =
+  | Unexpected of int
+
+let error_msg = function
+  | Unexpected got ->
+      "Unexpected '" ^ String.make 1 (char_of_int got) ^"' while lexing"
+
+exception Error of error_kind span
+
+
+
 let digit = [%sedlex.regexp? '0' .. '9']
 
 let int = [%sedlex.regexp? Plus digit]
 
-let letter = [%sedlex.regexp? 'a' .. 'z']
+let letter = [%sedlex.regexp? 'a' .. 'z' | 'A' .. 'Z']
 
 let rec token buf =
   let mk tk =
@@ -62,8 +74,10 @@ let rec token buf =
   | '*' -> mk (TBinOp OpMul)
   | '/' -> mk (TBinOp OpDiv)
   | '!' -> mk (TUnOp OpNot)
+  | "==" -> mk (TBinOp OpEq)
+  | '=' -> mk (TBinOp OpAssign)
   | eof -> mk TEof
-  | _ -> failwith "Unexpected character"
+  | _ -> raise (Error (mk (Unexpected (Sedlexing.lexeme_char buf (Sedlexing.lexeme_start buf)))))
 
 let lex_stream text =
   let buf = Sedlexing.Utf8.from_string text in

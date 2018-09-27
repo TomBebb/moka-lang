@@ -7,7 +7,7 @@ type const =
   | CBool of bool
   | CNull
 
-type binop = OpAdd | OpSub | OpMul | OpDiv
+type binop = OpAdd | OpSub | OpMul | OpDiv | OpAssign | OpEq
 
 type unop = OpNeg | OpNot
 
@@ -29,7 +29,7 @@ and expr = expr_def span
 
 type arg = {aname: string; atype: ty}
 
-type member_kind = MVar of ty option * expr | MFunc of arg list * ty * expr
+type member_kind = MVar of ty option * expr option | MFunc of arg list * ty * expr
 
 type member_mod = MStatic | MPublic | MPrivate
 
@@ -72,6 +72,8 @@ let s_binop = function
   | OpSub -> "-"
   | OpMul -> "*"
   | OpDiv -> "/"
+  | OpAssign -> "="
+  | OpEq -> "=="
 
 let s_unop = function OpNeg -> "-" | OpNot -> "!"
 
