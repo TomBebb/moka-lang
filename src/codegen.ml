@@ -15,6 +15,7 @@ type gen_ctx =
   { gen_ctx: llcontext
   ; gen_mod: llmodule
   ; gen_main: llvalue
+  ; mutable gen_func: llvalue
   ; gen_builder: llbuilder
   ; gen_block: llbasicblock
   ; gen_vars: (string, llvalue) Hashtbl.t Stack.t
@@ -32,6 +33,7 @@ let init () =
   { gen_ctx= ctx
   ; gen_mod= main_mod
   ; gen_main= main_func
+  ; gen_func= main_func
   ; gen_vars= Stack.create ()
   ; gen_this= Llvm.const_int (Llvm.i1_type ctx) 0
   ; gen_builder= builder
@@ -93,6 +95,10 @@ let rec gen_expr ctx (def, pos) =
     match find_var ctx i with
     | Some v -> v
     | None -> raise (Typer.Error (UnresolvedIdent i, pos)) )
+  | TEBinOp (OpEq, a, b) ->
+      let a_val = gen_expr ctx a in
+      let b_val = gen_expr ctx b in
+      build_icmp Llvm.Icmp.Eq a_val b_val "eq" ctx.gen_builder
   | TEBinOp (OpAssign, a, b) ->
       let a_ref = gen_expr_lhs ctx a in
       let b_val = gen_expr ctx b in
@@ -118,7 +124,34 @@ let rec gen_expr ctx (def, pos) =
       let last = ref None in
       List.iter (fun ex -> last := Some (gen_expr ctx ex)) exprs ;
       get !last
-  | _ -> raise (Failure "How even")
+  | TEIf (cond, if_e, Some else_e) ->
+      let cond = gen_expr ctx cond in
+      let then_bl = append_block ctx.gen_ctx "then" ctx.gen_func in
+      let else_bl = append_block ctx.gen_ctx "else" ctx.gen_func in
+      let after_bl = append_block ctx.gen_ctx "after" ctx.gen_func in
+      let ptr =
+        build_alloca (gen_ty ctx (ty_of if_e)) "ifval" ctx.gen_builder
+      in
+      let _ = build_cond_br cond then_bl else_bl ctx.gen_builder in
+      Llvm.position_at_end then_bl ctx.gen_builder ;
+      let _ = build_store (gen_expr ctx if_e) ptr ctx.gen_builder in
+      let _ = build_br after_bl ctx.gen_builder in
+      Llvm.position_at_end else_bl ctx.gen_builder ;
+      let _ = build_store (gen_expr ctx else_e) ptr ctx.gen_builder in
+      let _ = build_br after_bl ctx.gen_builder in
+      Llvm.position_at_end after_bl ctx.gen_builder ;
+      build_load ptr "ifval" ctx.gen_builder
+  | TEIf (cond, if_e, None) ->
+      let cond = gen_expr ctx cond in
+      let then_bl = append_block ctx.gen_ctx "then" ctx.gen_func in
+      let after_bl = append_block ctx.gen_ctx "after" ctx.gen_func in
+      let _ = build_cond_br cond then_bl after_bl ctx.gen_builder in
+      Llvm.position_at_end then_bl ctx.gen_builder ;
+      let _ = gen_expr ctx if_e in
+      let _ = build_br after_bl ctx.gen_builder in
+      Llvm.position_at_end after_bl ctx.gen_builder ;
+      cond
+  | _ -> raise (Failure (s_ty_expr "" (def, pos)))
 
 let member_name _ path field = s_path path ^ "_" ^ field.tmname
 
@@ -165,6 +198,7 @@ let gen_typedef ctx (meta, _) =
       | TMFunc (_, ret, ex) ->
           let func = get (lookup_function name ctx.gen_mod) in
           let entry = append_block ctx.gen_ctx "entry" func in
+          ctx.gen_func <- func ;
           Llvm.position_at_end entry ctx.gen_builder ;
           enter_block ctx ;
           let meta, _ = ex in

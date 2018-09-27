@@ -10,6 +10,8 @@ type ty_expr_def =
   | TEBlock of ty_expr list
   | TECall of ty_expr * ty_expr list
   | TEParen of ty_expr
+  | TEIf of ty_expr * ty_expr * ty_expr option
+  | TEWhile of ty_expr * ty_expr
 
 and ty_expr_meta = {edef: ty_expr_def; ety: ty}
 
@@ -39,6 +41,7 @@ type error_kind =
   | UnresolvedField of ty * string
   | CannotField of ty
   | UnresolvedFieldType of string
+  | Expected of ty
 
 let error_msg = function
   | UnresolvedIdent s -> "Failed to resolve identifier '" ^ s ^ "'"
@@ -51,6 +54,7 @@ let error_msg = function
   | CannotField t -> "Type " ^ s_ty t ^ " has no fields"
   | UnresolvedFieldType name ->
       "Type of field '" ^ name ^ "' could not be resolved"
+  | Expected t -> "Expected type " ^ s_ty t
 
 exception Error of error_kind span
 
@@ -158,6 +162,27 @@ let rec type_expr ctx ex =
       let func = type_expr ctx func in
       let args = List.map (type_expr ctx) args in
       mk (TECall (func, args)) (TPrim TVoid)
+  | EIf (cond, if_e, None) ->
+      let cond = type_expr ctx cond in
+      let if_e = type_expr ctx if_e in
+      let _, pos = cond in
+      if ty_of cond != TPrim TBool then
+        raise (Error (Expected (TPrim TBool), pos)) ;
+      mk (TEIf (cond, if_e, None)) (ty_of if_e)
+  | EIf (cond, if_e, Some else_e) ->
+      let cond = type_expr ctx cond in
+      let if_e = type_expr ctx if_e in
+      let else_e = type_expr ctx else_e in
+      let _, pos = cond in
+      if ty_of cond != TPrim TBool then
+        raise (Error (Expected (TPrim TBool), pos)) ;
+      mk (TEIf (cond, if_e, Some else_e)) (ty_of if_e)
+  | EWhile (cond, body) ->
+      let cond = type_expr ctx cond in
+      let body = type_expr ctx body in
+      if ty_of cond != TPrim TBool then
+        raise (Error (Expected (TPrim TBool), pos)) ;
+      mk (TEWhile (cond, body)) (TPrim TVoid)
 
 let type_member ctx (def, pos) =
   let kind =
@@ -194,3 +219,10 @@ let rec s_ty_expr tabs (meta, _) =
       ^ String.concat "," (List.map (s_ty_expr tabs) exs)
       ^ ")"
   | TEParen ex -> "(" ^ s_ty_expr tabs ex ^ ")"
+  | TEIf (cond, if_e, None) ->
+      "if " ^ s_ty_expr tabs cond ^ " " ^ s_ty_expr tabs if_e
+  | TEIf (cond, if_e, Some else_e) ->
+      "if " ^ s_ty_expr tabs cond ^ " " ^ s_ty_expr tabs if_e ^ " else "
+      ^ s_ty_expr tabs else_e
+  | TEWhile (cond, body) ->
+      "while " ^ s_ty_expr tabs cond ^ " " ^ s_ty_expr tabs body

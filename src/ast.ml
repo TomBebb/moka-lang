@@ -26,6 +26,8 @@ type expr_def =
   | EBlock of expr list
   | ECall of expr * expr list
   | EParen of expr
+  | EIf of expr * expr * expr option
+  | EWhile of expr * expr
 
 and expr = expr_def span
 
@@ -97,3 +99,8 @@ let rec s_expr tabs (def, _) =
       ^ String.concat "," (List.map (s_expr tabs) exs)
       ^ ")"
   | EParen ex -> "(" ^ s_expr tabs ex ^ ")"
+  | EIf (cond, if_e, None) -> "if " ^ s_expr tabs cond ^ " " ^ s_expr tabs if_e
+  | EIf (cond, if_e, Some else_e) ->
+      "if " ^ s_expr tabs cond ^ " " ^ s_expr tabs if_e ^ " else "
+      ^ s_expr tabs else_e
+  | EWhile (cond, body) -> "while " ^ s_expr tabs cond ^ " " ^ s_expr tabs body

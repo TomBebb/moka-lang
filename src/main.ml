@@ -7,7 +7,9 @@ let _ =
   let typer = Typer.init () in
   print_endline "lexing" ;
   let stream =
-    lex_stream "class HelloWorld { static func main(): int { 7 + 9 } }"
+    lex_stream
+      "class HelloWorld { static func main(): int { if 3 == 2 {12} else {24} \
+       } }"
   in
   let _ =
     try

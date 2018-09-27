@@ -59,6 +59,17 @@ let rec parse_expr tks =
         let exs = parse_exprs tks TCloseBrace in
         let last = expect tks [TCloseBrace] "block" in
         mk_pos (EBlock exs) first_pos last
+    | TKeyword KIf ->
+        let cond = parse_expr tks in
+        let body = parse_expr tks in
+        let else_bod =
+          if next_is tks (TKeyword KElse) then
+            Some
+              (let _ = Stream.next tks in
+               parse_expr tks)
+          else None
+        in
+        mk_pos (EIf (cond, body, else_bod)) first_pos first_pos
     | _ -> raise (Error (mk_one (Unexpected (first, "expression")) first_pos))
   in
   let rec parse_after_expr base tks =
