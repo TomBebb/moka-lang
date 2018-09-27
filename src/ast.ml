@@ -15,6 +15,8 @@ type pos = {pfile: string; pmin: int; pmax: int}
 
 type 'a span = 'a * pos
 
+let span_v (v, _) = v
+
 type expr_def =
   | EConst of const
   | EIdent of string

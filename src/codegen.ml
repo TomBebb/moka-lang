@@ -1,25 +1,65 @@
 open Llvm
 open Type
+open Typer
 open Ast
+
+type error_kind = UnresolvedLHS
+
+let error_msg = function UnresolvedLHS -> "unresolved RHS"
+
+exception Error of error_kind span
+
+type gen_def_meta = {dstruct: lltype; dfield_indicies: (ty, int) Hashtbl.t}
 
 type gen_ctx =
   { gen_ctx: llcontext
   ; gen_mod: llmodule
+  ; gen_main: llvalue
   ; gen_builder: llbuilder
-  ; gen_structs: (path, lltype) Hashtbl.t }
+  ; gen_block: llbasicblock
+  ; gen_vars: (string, llvalue) Hashtbl.t Stack.t
+  ; gen_this: llvalue
+  ; gen_local: lltype
+  ; gen_typedefs: (path, gen_def_meta) Hashtbl.t }
 
 let init () =
   let ctx = create_context () in
   let main_mod = create_module ctx "main" in
   let builder = builder ctx in
+  let sig_ty = function_type (void_type ctx) (Array.of_list []) in
+  let main_func = declare_function "main" sig_ty main_mod in
+  let entry = append_block ctx "entry" main_func in
   { gen_ctx= ctx
   ; gen_mod= main_mod
+  ; gen_main= main_func
+  ; gen_vars= Stack.create ()
+  ; gen_this= Llvm.const_int (Llvm.i1_type ctx) 0
   ; gen_builder= builder
-  ; gen_structs= Hashtbl.create 10 }
+  ; gen_block= entry
+  ; gen_local= Llvm.i1_type ctx
+  ; gen_typedefs= Hashtbl.create 10 }
+
+let enter_block ctx = Stack.push (Hashtbl.create 12) ctx.gen_vars
+
+let leave_block ctx = Stack.pop ctx.gen_vars
+
+let find_var ctx name =
+  let res = ref None in
+  Stack.iter
+    (fun tbl ->
+      match Hashtbl.find_opt tbl name with
+      | Some v -> res := Some v
+      | None -> () )
+    ctx.gen_vars ;
+  !res
+
+let get = function None -> raise (Failure "not supported") | Some v -> v
 
 let rec gen_ty ctx ty =
   match ty with
-  | TFunc (args, ret) -> Llvm.function_type (gen_ty ctx ret) (Array.of_list (List.map (gen_ty ctx) args))
+  | TFunc (args, ret) ->
+      Llvm.function_type (gen_ty ctx ret)
+        (Array.of_list (List.map (gen_ty ctx) args))
   | TPrim TVoid -> Llvm.void_type ctx.gen_ctx
   | TPrim TBool -> Llvm.i1_type ctx.gen_ctx
   | TPrim TByte -> Llvm.i8_type ctx.gen_ctx
@@ -28,7 +68,8 @@ let rec gen_ty ctx ty =
   | TPrim TLong -> Llvm.i64_type ctx.gen_ctx
   | TPrim TFloat -> Llvm.float_type ctx.gen_ctx
   | TPrim TDouble -> Llvm.double_type ctx.gen_ctx
-  | TPath path -> Hashtbl.find ctx.gen_structs path
+  | TPath path ->
+      Llvm.pointer_type (Hashtbl.find ctx.gen_typedefs path).dstruct
 
 let gen_const ctx = function
   | CInt i -> Llvm.const_int (gen_ty ctx (TPrim TInt)) i
@@ -37,7 +78,109 @@ let gen_const ctx = function
   | CBool b -> Llvm.const_int (gen_ty ctx (TPrim TBool)) (if b then 1 else 0)
   | CNull -> Llvm.const_null (void_type ctx.gen_ctx)
 
+let gen_expr_lhs ctx (def, pos) =
+  match def.edef with
+  | TEIdent id -> (
+    match find_var ctx id with
+    | Some v -> Llvm.build_load v id ctx.gen_builder
+    | None -> raise (Error (UnresolvedLHS, pos)) )
+  | _ -> raise (Error (UnresolvedLHS, pos))
+
+let rec gen_expr ctx (def, pos) =
+  match def.edef with
+  | TEConst c -> gen_const ctx c
+  | TEIdent i -> (
+    match find_var ctx i with
+    | Some v -> v
+    | None -> raise (Typer.Error (UnresolvedIdent i, pos)) )
+  | TEBinOp (OpAssign, a, b) ->
+      let a_ref = gen_expr_lhs ctx a in
+      let b_val = gen_expr ctx b in
+      Llvm.build_store b_val a_ref ctx.gen_builder
+  | TEBinOp (((OpAdd | OpSub | OpMul | OpDiv) as op), a, b) ->
+      let a_val = gen_expr ctx a in
+      let b_val = gen_expr ctx b in
+      assert (Llvm.type_of a_val = gen_ty ctx (span_v a).ety) ;
+      assert (Llvm.type_of b_val = gen_ty ctx (span_v b).ety) ;
+      let ty = def.ety in
+      ( match (op, is_real ty) with
+      | OpAdd, false -> Llvm.build_add
+      | OpAdd, true -> Llvm.build_fadd
+      | OpSub, false -> Llvm.build_sub
+      | OpSub, true -> Llvm.build_fsub
+      | OpMul, false -> Llvm.build_mul
+      | OpMul, true -> Llvm.build_fmul
+      | OpDiv, false -> Llvm.build_sdiv
+      | OpDiv, true -> Llvm.build_fdiv
+      | _ -> raise (Typer.Error (UnresolvedIdent "aaaa", pos)) )
+        a_val b_val "tmp_op" ctx.gen_builder
+  | TEBlock exprs ->
+      let last = ref None in
+      List.iter (fun ex -> last := Some (gen_expr ctx ex)) exprs ;
+      get !last
+  | _ -> raise (Failure "How even")
+
+let member_name _ path field = s_path path ^ "_" ^ field.tmname
+
+let pre_gen_typedef ctx (meta, _) =
+  let meta : ty_type_def_meta = meta in
+  let types = Array.of_list [] in
+  let push ty = types.(Array.length types) <- ty in
+  List.iter
+    (fun (field, _) ->
+      let is_static = MemberMods.mem MStatic field.tmmods in
+      let name = member_name ctx meta.tepath field in
+      match field.tmkind with
+      | TMVar (ty, _) ->
+          let llty = gen_ty ctx ty in
+          if is_static then
+            let _ = Llvm.declare_global llty name ctx.gen_mod in
+            ()
+          else push llty
+      | TMFunc (args, ret, _) ->
+          let llargs =
+            Array.of_list (if is_static then [] else [ctx.gen_local])
+          in
+          let args = List.map (fun a -> gen_ty ctx a.atype) args in
+          List.iter (fun arg -> llargs.(Array.length llargs) <- arg) args ;
+          let sig_ty = Llvm.function_type (gen_ty ctx ret) llargs in
+          let _ = Llvm.declare_function name sig_ty ctx.gen_mod in
+          () )
+    meta.temembers ;
+  match meta.tekind with
+  | EClass _ | EStruct ->
+      let gen = Llvm.named_struct_type ctx.gen_ctx (s_path meta.tepath) in
+      struct_set_body gen types false
+
+let gen_typedef ctx (meta, _) =
+  let meta : ty_type_def_meta = meta in
+  List.iter
+    (fun (field, _) ->
+      let is_static = MemberMods.mem MStatic field.tmmods in
+      let name = member_name ctx meta.tepath field in
+      match field.tmkind with
+      | TMVar (_, Some va) when is_static ->
+          let global = get (lookup_global name ctx.gen_mod) in
+          set_initializer global (gen_expr ctx va)
+      | TMFunc (_, ret, ex) ->
+          let func = get (lookup_function name ctx.gen_mod) in
+          let entry = append_block ctx.gen_ctx "entry" func in
+          Llvm.position_at_end entry ctx.gen_builder ;
+          enter_block ctx ;
+          let meta, _ = ex in
+          let va = gen_expr ctx ex in
+          ( if meta.ety = ret then
+            let _ =
+              if ret = TPrim TVoid then build_ret_void ctx.gen_builder
+              else build_ret va ctx.gen_builder
+            in
+            () ) ;
+          let _ = leave_block ctx in
+          Llvm.position_at_end ctx.gen_block ctx.gen_builder ;
+          ()
+      | _ -> () )
+    meta.temembers
+
 let uninit ctx =
-  dump_module ctx.gen_mod ;
   dispose_module ctx.gen_mod ;
   dispose_context ctx.gen_ctx

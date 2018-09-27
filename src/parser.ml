@@ -16,6 +16,9 @@ let error_msg = function
 
 exception Error of error_kind span
 
+let next_is tks want =
+  match Stream.peek tks with Some (def, _) -> def = want | _ -> false
+
 let mk_pos ex first last =
   (ex, {pfile= first.pfile; pmin= first.pmin; pmax= last.pmax})
 
@@ -37,6 +40,12 @@ let expect tks expected name =
   else pos
 
 let rec parse_expr tks =
+  let rec parse_exprs tks term =
+    if next_is tks term then []
+    else
+      let ex = parse_expr tks in
+      [ex] @ parse_exprs tks term
+  in
   let parse_base_expr tks =
     let first, first_pos = Stream.next tks in
     match first with
@@ -46,6 +55,10 @@ let rec parse_expr tks =
         let inner = parse_expr tks in
         let last = expect tks [TCloseParen] "parenthesis" in
         mk_pos (EParen inner) first_pos last
+    | TOpenBrace ->
+        let exs = parse_exprs tks TCloseBrace in
+        let last = expect tks [TCloseBrace] "block" in
+        mk_pos (EBlock exs) first_pos last
     | _ -> raise (Error (mk_one (Unexpected (first, "expression")) first_pos))
   in
   let rec parse_after_expr base tks =
@@ -64,9 +77,6 @@ let rec parse_expr tks =
   in
   let base = parse_base_expr tks in
   parse_after_expr base tks
-
-let next_is tks want =
-  match Stream.peek tks with Some (def, _) -> def = want | _ -> false
 
 let parse_path tks =
   let first, _ = expect_ident tks in
@@ -100,6 +110,13 @@ let parse_member_mod tks =
       Some MPrivate
   | _ -> None
 
+let rec parse_member_mods tks mods =
+  match parse_member_mod tks with
+  | Some md ->
+      mods := MemberMods.add md !mods ;
+      parse_member_mods tks mods
+  | _ -> ()
+
 let rec parse_args tks term =
   if next_is tks term then []
   else
@@ -111,12 +128,7 @@ let rec parse_args tks term =
 
 let parse_member tks =
   let mods = ref MemberMods.empty in
-  let should_continue = ref true in
-  while !should_continue do
-    match parse_member_mod tks with
-    | Some v -> mods := MemberMods.add v !mods
-    | None -> should_continue := false
-  done ;
+  parse_member_mods tks mods ;
   let tk = Stream.next tks in
   let def, pos = tk in
   match def with
@@ -150,7 +162,10 @@ let parse_member tks =
   | _ -> raise (Error (mk_one (Unexpected (def, "member")) pos))
 
 let rec parse_members tks term =
-  if next_is tks term then [] else parse_member tks :: parse_members tks term
+  if next_is tks term then []
+  else
+    let mem = parse_member tks in
+    mem :: parse_members tks term
 
 let parse_type_def tks =
   let tk = Stream.next tks in

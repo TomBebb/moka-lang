@@ -33,3 +33,5 @@ let rec s_ty = function
 let is_numeric = function
   | TPrim (TByte | TShort | TInt | TLong | TFloat | TDouble) -> true
   | _ -> false
+
+let is_real = function TPrim (TFloat | TDouble) -> true | _ -> false
