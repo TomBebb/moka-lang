@@ -101,22 +101,13 @@ let parse_member_mod tks =
   | _ -> None
 
 let rec parse_args tks term =
-	if next_is tks term then
-		[]
-	else begin
-		let (name, _) = expect_ident tks in
-		let _ = expect tks [TColon] "arguments" in
-		let ty = parse_ty tks in
-		let arg = 
-		{
-			aname = name;
-			atype = ty;
-		} in
-		if next_is tks TComma then
-			arg :: parse_args tks term
-		else
-			[arg]
-	end
+  if next_is tks term then []
+  else
+    let name, _ = expect_ident tks in
+    let _ = expect tks [TColon] "arguments" in
+    let ty = parse_ty tks in
+    let arg = {aname= name; atype= ty} in
+    if next_is tks TComma then arg :: parse_args tks term else [arg]
 
 let parse_member tks =
   let mods = ref MemberMods.empty in
@@ -142,23 +133,24 @@ let parse_member tks =
       let ex = parse_expr tks in
       ({mname= name; mkind= MFunc ([], ret, ex); mmods= !mods}, pos)
   | TKeyword KVar ->
-  	let name, _ = expect_ident tks in
-  	let ty = if next_is tks TColon then begin
-  		let _ = Stream.next tks in
-  		Some (parse_ty tks)
-  	end else None in
-  	let ex = if next_is tks (TBinOp (OpAssign)) then begin
-  		let _ = Stream.next tks in
-  		Some(parse_expr tks)
-  	end else None in
-  	({mname = name; mkind = MVar (ty, ex); mmods = !mods}, pos)
+      let name, _ = expect_ident tks in
+      let ty =
+        if next_is tks TColon then
+          let _ = Stream.next tks in
+          Some (parse_ty tks)
+        else None
+      in
+      let ex =
+        if next_is tks (TBinOp OpAssign) then
+          let _ = Stream.next tks in
+          Some (parse_expr tks)
+        else None
+      in
+      ({mname= name; mkind= MVar (ty, ex); mmods= !mods}, pos)
   | _ -> raise (Error (mk_one (Unexpected (def, "member")) pos))
 
 let rec parse_members tks term =
-	if next_is tks term then
-		[]
-	else
-		parse_member tks :: parse_members tks term
+  if next_is tks term then [] else parse_member tks :: parse_members tks term
 
 let parse_type_def tks =
   let tk = Stream.next tks in
@@ -171,10 +163,10 @@ let parse_type_def tks =
       in
       let cl = {cextends= ext; cimplements= []} in
       let _ = expect tks [TOpenBrace] "class declaration" in
-      let members =  parse_members tks TCloseBrace in
+      let members = parse_members tks TCloseBrace in
       let last = expect tks [TCloseBrace] "class declaration" in
       ( { epath= ([], name)
-        ; emembers=members
+        ; emembers= members
         ; ekind= EClass cl
         ; emods= ClassMods.empty }
       , {pfile= start.pfile; pmin= start.pmin; pmax= last.pmax} )

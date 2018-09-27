@@ -17,8 +17,9 @@ let init () =
   ; gen_builder= builder
   ; gen_structs= Hashtbl.create 10 }
 
-let gen_ty ctx ty =
+let rec gen_ty ctx ty =
   match ty with
+  | TFunc (args, ret) -> Llvm.function_type (gen_ty ctx ret) (Array.of_list (List.map (gen_ty ctx) args))
   | TPrim TVoid -> Llvm.void_type ctx.gen_ctx
   | TPrim TBool -> Llvm.i1_type ctx.gen_ctx
   | TPrim TByte -> Llvm.i8_type ctx.gen_ctx

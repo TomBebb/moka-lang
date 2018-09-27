@@ -6,7 +6,7 @@ let _ =
   let stream = lex_stream "class Poop { }" in
   let _ =
     try Some (parse_type_def stream) with Parser.Error (kind, _) ->
-      print_endline ("Parser Error: " ^ error_msg kind) ;
+      print_endline ("Parser Error: " ^ Parser.error_msg kind) ;
       None
   in
   let _ = Codegen.uninit gen in

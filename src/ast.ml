@@ -29,7 +29,9 @@ and expr = expr_def span
 
 type arg = {aname: string; atype: ty}
 
-type member_kind = MVar of ty option * expr option | MFunc of arg list * ty * expr
+type member_kind =
+  | MVar of ty option * expr option
+  | MFunc of arg list * ty * expr
 
 type member_mod = MStatic | MPublic | MPrivate
 
