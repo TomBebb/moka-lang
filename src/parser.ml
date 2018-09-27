@@ -16,8 +16,6 @@ let error_msg = function
 
 exception Error of error_kind span
 
-let next_is tks def = Stream.peek tks = Some def
-
 let mk_pos ex first last =
   (ex, {pfile= first.pfile; pmin= first.pmin; pmax= last.pmax})
 
@@ -58,6 +56,10 @@ let rec parse_expr tks =
         let name, last = field in
         let _, first = base in
         parse_after_expr (mk_pos (EField (base, name)) first last) tks
+    | Some (TBinOp op, _) ->
+        let _ = Stream.next tks in
+        let other = parse_expr tks in
+        parse_after_expr (mk (EBinOp (op, base, other)) base other) tks
     | _ -> base
   in
   let base = parse_base_expr tks in
@@ -67,12 +69,16 @@ let next_is tks want =
   match Stream.peek tks with Some (def, _) -> def = want | _ -> false
 
 let parse_path tks =
-  let parts = ref [expect_ident tks] in
+  let first, _ = expect_ident tks in
+  let parts = Array.of_list [first] in
   while next_is tks TDot do
     let _ = Stream.next tks in
-    parts := !parts @ [expect_ident tks]
+    let part, _ = expect_ident tks in
+    parts.(Array.length parts) <- part
   done ;
-  !parts
+  let name = parts.(Array.length parts - 1) in
+  let parts = Array.sub parts 0 (Array.length parts - 1) in
+  (Array.to_list parts, name)
 
 let parse_ty tks =
   let tk = Stream.next tks in
@@ -81,7 +87,27 @@ let parse_ty tks =
   | TKPrim p -> TPrim p
   | _ -> raise (Error (mk_one (Unexpected (def, "type")) pos))
 
+let parse_member_mod tks =
+  match Stream.peek tks with
+  | Some (TKeyword KStatic, _) ->
+      let _ = Stream.next tks in
+      Some MStatic
+  | Some (TKeyword KPublic, _) ->
+      let _ = Stream.next tks in
+      Some MPublic
+  | Some (TKeyword KPrivate, _) ->
+      let _ = Stream.next tks in
+      Some MPrivate
+  | _ -> None
+
 let parse_member tks =
+  let mods = ref MemberMods.empty in
+  let should_continue = ref true in
+  while !should_continue do
+    match parse_member_mod tks with
+    | Some v -> mods := MemberMods.add v !mods
+    | None -> should_continue := false
+  done ;
   let tk = Stream.next tks in
   let def, pos = tk in
   match def with
@@ -96,17 +122,24 @@ let parse_member tks =
         else TPrim TVoid
       in
       let ex = parse_expr tks in
-      {mname= name; mkind= MFunc ([], TPrim TVoid, ex)}
+      {mname= name; mkind= MFunc ([], ret, ex); mmods= !mods}
   | _ -> raise (Error (mk_one (Unexpected (def, "member")) pos))
 
 let parse_type_def tks =
   let tk = Stream.next tks in
-  let def, pos = tk in
+  let def, start = tk in
   match def with
   | TKeyword KClass ->
-      let name = expect_ident tks in
+      let name, _ = expect_ident tks in
       let ext =
         if next_is tks (TKeyword KExtends) then Some (parse_path tks) else None
       in
-      ()
-  | _ -> raise (Error (mk_one (Unexpected (def, "type definition")) pos))
+      let cl = {cextends= ext; cimplements= []} in
+      let _ = expect tks [TOpenBrace] "class declaration" in
+      let last = expect tks [TCloseBrace] "class declaration" in
+      ( { epath= ([], name)
+        ; emembers= []
+        ; ekind= EClass cl
+        ; emods= ClassMods.empty }
+      , {pfile= start.pfile; pmin= start.pmin; pmax= last.pmax} )
+  | _ -> raise (Error (mk_one (Unexpected (def, "type definition")) start))

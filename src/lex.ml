@@ -17,6 +17,34 @@ let rec token buf =
   in
   match%sedlex buf with
   | white_space -> token buf
+  | "void" -> mk (TKPrim TVoid)
+  | "bool" -> mk (TKPrim TBool)
+  | "byte" -> mk (TKPrim TByte)
+  | "short" -> mk (TKPrim TShort)
+  | "int" -> mk (TKPrim TInt)
+  | "long" -> mk (TKPrim TLong)
+  | "float" -> mk (TKPrim TFloat)
+  | "class" -> mk (TKeyword KClass)
+  | "interface" -> mk (TKeyword KInterface)
+  | "struct" -> mk (TKeyword KStruct)
+  | "enum" -> mk (TKeyword KEnum)
+  | "extends" -> mk (TKeyword KExtends)
+  | "implements" -> mk (TKeyword KImplements)
+  | "import" -> mk (TKeyword KImport)
+  | "var" -> mk (TKeyword KVar)
+  | "val" -> mk (TKeyword KVal)
+  | "func" -> mk (TKeyword KFunc)
+  | "static" -> mk (TKeyword KStatic)
+  | "public" -> mk (TKeyword KPublic)
+  | "private" -> mk (TKeyword KPrivate)
+  | "if" -> mk (TKeyword KIf)
+  | "else" -> mk (TKeyword KElse)
+  | "while" -> mk (TKeyword KWhile)
+  | "for" -> mk (TKeyword KFor)
+  | "break" -> mk (TKeyword KBreak)
+  | "contine" -> mk (TKeyword KContinue)
+  | "this" -> mk (TKeyword KThis)
+  | "null" -> mk (TKeyword KNull)
   | int -> mk (TConst (CInt (int_of_string (Sedlexing.Utf8.lexeme buf))))
   | letter, Star ('A' .. 'Z' | 'a' .. 'z' | digit) ->
       mk (TIdent (Sedlexing.Utf8.lexeme buf))
@@ -34,12 +62,6 @@ let rec token buf =
   | '*' -> mk (TBinOp OpMul)
   | '/' -> mk (TBinOp OpDiv)
   | '!' -> mk (TUnOp OpNot)
-  | "void" -> mk (TKPrim TVoid)
-  | "bool" -> mk (TKPrim TBool)
-  | "byte" -> mk (TKPrim TByte)
-  | "short" -> mk (TKPrim TShort)
-  | "int" -> mk (TKPrim TInt)
-  | "long" -> mk (TKPrim TLong)
   | eof -> mk TEof
   | _ -> failwith "Unexpected character"
 

@@ -3,9 +3,12 @@ open Lex
 open Parser
 
 let _ =
-  print_endline (s_const (CInt 3)) ;
   let gen = Codegen.init () in
-  let stream = lex_stream "(2)" in
-  print_endline (s_expr (parse_expr stream)) ;
+  let stream = lex_stream "class Poop extends SuperPoop" in
+  let ex =
+    try Some (parse_type_def stream) with Parser.Error (kind, _) ->
+      print_endline ("Parser Error: " ^ error_msg kind) ;
+      None
+  in
   let _ = Codegen.uninit gen in
   ()

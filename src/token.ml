@@ -14,6 +14,10 @@ type keyword =
   | KVar
   | KVal
   | KFunc
+  (* modifiers *)
+  | KStatic
+  | KPublic
+  | KPrivate
   (* control flow *)
   | KIf
   | KElse
@@ -23,6 +27,7 @@ type keyword =
   | KContinue
   (* special *)
   | KThis
+  | KNull
 
 type token =
   | TKeyword of keyword
@@ -55,6 +60,10 @@ let s_keyword = function
   | KVar -> "var"
   | KVal -> "val"
   | KFunc -> "func"
+  (* modifiers *)
+  | KStatic -> "static"
+  | KPublic -> "public"
+  | KPrivate -> "private"
   (* control flow *)
   | KIf -> "if"
   | KElse -> "else"
@@ -64,6 +73,7 @@ let s_keyword = function
   | KContinue -> "continue"
   (* special *)
   | KThis -> "this"
+  | KNull -> "null"
 
 let s_token_def = function
   | TKeyword kw -> s_keyword kw

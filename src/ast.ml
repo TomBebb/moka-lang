@@ -31,10 +31,6 @@ type arg = {aname: string; atype: ty}
 
 type member_kind = MVar of ty option * expr | MFunc of arg list * ty * expr
 
-type member_def = {mname: string; mkind: member_kind}
-
-type member = member_def span
-
 type member_mod = MStatic | MPublic | MPrivate
 
 module MemberMods = Set.Make (struct
@@ -42,6 +38,10 @@ module MemberMods = Set.Make (struct
 
   type t = member_mod
 end)
+
+type member_def = {mname: string; mkind: member_kind; mmods: MemberMods.t}
+
+type member = member_def span
 
 type class_mod = CPublic | CPrivate
 
@@ -51,11 +51,12 @@ module ClassMods = Set.Make (struct
   type t = class_mod
 end)
 
-type class_def = {cmembers: member list; cextends: path; cimplements: path list}
+type class_def = {cextends: path option; cimplements: path list}
 
-type type_def_kind = EClass of member list | EStruct of member list
+type type_def_kind = EClass of class_def | EStruct
 
-type type_def_meta = {ekind: type_def_kind; emods: ClassMods.t}
+type type_def_meta =
+  {epath: path; ekind: type_def_kind; emods: ClassMods.t; emembers: member list}
 
 type type_def = type_def_meta span
 
