@@ -85,6 +85,8 @@ let ty_of tex =
   let meta, _ = tex in
   meta.ety
 
+let set_var ctx name ty = Hashtbl.add (Stack.top ctx.tvars) name ty
+
 let find_var ctx name =
   let res = ref None in
   Stack.iter
@@ -192,7 +194,12 @@ let type_member ctx (def, pos) =
         let ex = type_expr ctx ex in
         TMVar (ty_of ex, Some ex)
     | MVar (None, None) -> raise (Error (UnresolvedFieldType def.mname, pos))
-    | MFunc (args, ret, body) -> TMFunc (args, ret, type_expr ctx body)
+    | MFunc (args, ret, body) ->
+        let _ = enter_block ctx in
+        List.iter (fun arg -> set_var ctx arg.aname arg.atype) args ;
+        let body = type_expr ctx body in
+        let _ = leave_block ctx in
+        TMFunc (args, ret, body)
   in
   ({tmkind= kind; tmname= def.mname; tmmods= def.mmods}, pos)
 

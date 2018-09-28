@@ -135,7 +135,10 @@ let rec parse_args tks term =
     let _ = expect tks [TColon] "arguments" in
     let ty = parse_ty tks in
     let arg = {aname= name; atype= ty} in
-    if next_is tks TComma then arg :: parse_args tks term else [arg]
+    if next_is tks TComma then
+      let _ = expect tks [TComma] "args" in
+      arg :: parse_args tks term
+    else [arg]
 
 let parse_member tks =
   let mods = ref MemberMods.empty in
@@ -146,6 +149,7 @@ let parse_member tks =
   | TKeyword KFunc ->
       let name, _ = expect_ident tks in
       let _ = expect tks [TOpenParen] "function declaration" in
+      let args = parse_args tks TCloseParen in
       let _ = expect tks [TCloseParen] "function declaration" in
       let ret =
         if next_is tks TColon then
@@ -154,7 +158,7 @@ let parse_member tks =
         else TPrim TVoid
       in
       let ex = parse_expr tks in
-      ({mname= name; mkind= MFunc ([], ret, ex); mmods= !mods}, pos)
+      ({mname= name; mkind= MFunc (args, ret, ex); mmods= !mods}, pos)
   | TKeyword KVar ->
       let name, _ = expect_ident tks in
       let ty =

@@ -57,6 +57,8 @@ let find_var ctx name =
 
 let get = function None -> raise (Failure "not supported") | Some v -> v
 
+let set_var ctx name value = Hashtbl.add (Stack.top ctx.gen_vars) name value
+
 let rec gen_ty ctx ty =
   match ty with
   | TFunc (args, ret) ->
@@ -171,12 +173,12 @@ let pre_gen_typedef ctx (meta, _) =
             ()
           else push llty
       | TMFunc (args, ret, _) ->
-          let llargs =
-            Array.of_list (if is_static then [] else [ctx.gen_local])
-          in
+          let llargs = ref (if is_static then [] else [ctx.gen_local]) in
           let args = List.map (fun a -> gen_ty ctx a.atype) args in
-          List.iter (fun arg -> llargs.(Array.length llargs) <- arg) args ;
-          let sig_ty = Llvm.function_type (gen_ty ctx ret) llargs in
+          List.iter (fun arg -> llargs := !llargs @ [arg]) args ;
+          let sig_ty =
+            Llvm.function_type (gen_ty ctx ret) (Array.of_list !llargs)
+          in
           let _ = Llvm.declare_function name sig_ty ctx.gen_mod in
           () )
     meta.temembers ;
@@ -195,12 +197,17 @@ let gen_typedef ctx (meta, _) =
       | TMVar (_, Some va) when is_static ->
           let global = get (lookup_global name ctx.gen_mod) in
           set_initializer global (gen_expr ctx va)
-      | TMFunc (_, ret, ex) ->
+      | TMFunc (args, ret, ex) ->
           let func = get (lookup_function name ctx.gen_mod) in
           let entry = append_block ctx.gen_ctx "entry" func in
           ctx.gen_func <- func ;
           Llvm.position_at_end entry ctx.gen_builder ;
           enter_block ctx ;
+          List.iteri
+            (fun index arg ->
+              let param = Llvm.param func index in
+              set_var ctx arg.aname param )
+            args ;
           let meta, _ = ex in
           let va = gen_expr ctx ex in
           ( if meta.ety = ret then
