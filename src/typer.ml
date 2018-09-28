@@ -12,6 +12,7 @@ type ty_expr_def =
   | TEParen of ty_expr
   | TEIf of ty_expr * ty_expr * ty_expr option
   | TEWhile of ty_expr * ty_expr
+  | TEVar of ty option * string * ty_expr
 
 and ty_expr_meta = {edef: ty_expr_def; ety: ty}
 
@@ -122,6 +123,9 @@ let rec type_expr ctx ex =
     match find_var ctx id with
     | Some v -> mk (TEIdent id) v
     | None -> raise (Error (UnresolvedIdent id, pos)) )
+  | EVar (t, name, v) ->
+      let v = type_expr ctx v in
+      mk (TEVar (t, name, v)) (TPrim TVoid)
   | EParen inner ->
       let inner = type_expr ctx inner in
       mk (TEParen inner) (ty_of inner)
@@ -233,3 +237,7 @@ let rec s_ty_expr tabs (meta, _) =
       ^ s_ty_expr tabs else_e
   | TEWhile (cond, body) ->
       "while " ^ s_ty_expr tabs cond ^ " " ^ s_ty_expr tabs body
+  | TEVar (None, name, ex) ->
+      Printf.sprintf "var %s = %s" name (s_ty_expr tabs ex)
+  | TEVar (Some t, name, ex) ->
+      Printf.sprintf "var %s: %s = %s" name (s_ty t) (s_ty_expr tabs ex)

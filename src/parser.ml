@@ -39,6 +39,25 @@ let expect tks expected name =
     raise (Error (mk (Expected (expected, def, name)) tk tk))
   else pos
 
+let parse_path tks =
+  let first, _ = expect_ident tks in
+  let parts = Array.of_list [first] in
+  while next_is tks TDot do
+    let _ = Stream.next tks in
+    let part, _ = expect_ident tks in
+    parts.(Array.length parts) <- part
+  done ;
+  let name = parts.(Array.length parts - 1) in
+  let parts = Array.sub parts 0 (Array.length parts - 1) in
+  (Array.to_list parts, name)
+
+let parse_ty tks =
+  let tk = Stream.next tks in
+  let def, pos = tk in
+  match def with
+  | TKPrim p -> TPrim p
+  | _ -> raise (Error (mk_one (Unexpected (def, "type")) pos))
+
 let rec parse_expr tks =
   let rec parse_exprs tks term =
     if next_is tks term then []
@@ -51,6 +70,19 @@ let rec parse_expr tks =
     match first with
     | TIdent id -> mk_one (EIdent id) first_pos
     | TConst c -> mk_one (EConst c) first_pos
+    | TKeyword KVar ->
+        let name, _ = expect_ident tks in
+        let ty =
+          if next_is tks TColon then
+            Some
+              (let _ = Stream.next tks in
+               parse_ty tks)
+          else None
+        in
+        let _ = expect tks [TBinOp OpAssign] "variable declaration" in
+        let value = parse_expr tks in
+        let _, last_pos = value in
+        mk_pos (EVar (ty, name, value)) first_pos last_pos
     | TOpenParen ->
         let inner = parse_expr tks in
         let last = expect tks [TCloseParen] "parenthesis" in
@@ -88,25 +120,6 @@ let rec parse_expr tks =
   in
   let base = parse_base_expr tks in
   parse_after_expr base tks
-
-let parse_path tks =
-  let first, _ = expect_ident tks in
-  let parts = Array.of_list [first] in
-  while next_is tks TDot do
-    let _ = Stream.next tks in
-    let part, _ = expect_ident tks in
-    parts.(Array.length parts) <- part
-  done ;
-  let name = parts.(Array.length parts - 1) in
-  let parts = Array.sub parts 0 (Array.length parts - 1) in
-  (Array.to_list parts, name)
-
-let parse_ty tks =
-  let tk = Stream.next tks in
-  let def, pos = tk in
-  match def with
-  | TKPrim p -> TPrim p
-  | _ -> raise (Error (mk_one (Unexpected (def, "type")) pos))
 
 let parse_member_mod tks =
   match Stream.peek tks with
@@ -186,6 +199,16 @@ let parse_type_def tks =
   let tk = Stream.next tks in
   let def, start = tk in
   match def with
+  | TKeyword KStruct ->
+      let name, _ = expect_ident tks in
+      let _ = expect tks [TOpenBrace] "struct declaration" in
+      let members = parse_members tks TCloseBrace in
+      let last = expect tks [TCloseBrace] "struct declaration" in
+      ( { epath= ([], name)
+        ; emembers= members
+        ; ekind= EStruct
+        ; emods= ClassMods.empty }
+      , {pfile= start.pfile; pmin= start.pmin; pmax= last.pmax} )
   | TKeyword KClass ->
       let name, _ = expect_ident tks in
       let ext =

@@ -7,7 +7,7 @@ let () =
     | Typer.Error (kind, _) ->
         Some (Printf.sprintf "Typer error: %s" (Typer.error_msg kind))
     | Parser.Error (kind, _) ->
-        Some (Printf.sprintf "Typer error: %s" (Parser.error_msg kind))
+        Some (Printf.sprintf "Parser error: %s" (Parser.error_msg kind))
     | _ -> None (* for other exceptions *) )
 
 let _ =
@@ -16,7 +16,8 @@ let _ =
   print_endline "lexing" ;
   let stream =
     lex_stream
-      "class HelloWorld { static func add(a: int, b: int): int { a + b } }"
+      "struct HelloWorld { static func add(a: int, b: int): int { a + b } \
+       static func main(): void { var res = 12 + 12 } }"
   in
   Printexc.record_backtrace true ;
   let _ =

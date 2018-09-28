@@ -28,6 +28,7 @@ type expr_def =
   | EParen of expr
   | EIf of expr * expr * expr option
   | EWhile of expr * expr
+  | EVar of ty option * string * expr
 
 and expr = expr_def span
 
@@ -104,3 +105,6 @@ let rec s_expr tabs (def, _) =
       "if " ^ s_expr tabs cond ^ " " ^ s_expr tabs if_e ^ " else "
       ^ s_expr tabs else_e
   | EWhile (cond, body) -> "while " ^ s_expr tabs cond ^ " " ^ s_expr tabs body
+  | EVar (None, name, ex) -> Printf.sprintf "var %s = %s" name (s_expr tabs ex)
+  | EVar (Some t, name, ex) ->
+      Printf.sprintf "var %s: %s = %s" name (s_ty t) (s_expr tabs ex)

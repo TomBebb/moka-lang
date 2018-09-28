@@ -86,17 +86,21 @@ let gen_expr_lhs ctx (def, pos) =
   match def.edef with
   | TEIdent id -> (
     match find_var ctx id with
-    | Some v -> Llvm.build_load v id ctx.gen_builder
+    | Some v -> v
     | None -> raise (Error (UnresolvedLHS, pos)) )
   | _ -> raise (Error (UnresolvedLHS, pos))
 
 let rec gen_expr ctx (def, pos) =
   match def.edef with
   | TEConst c -> gen_const ctx c
-  | TEIdent i -> (
-    match find_var ctx i with
-    | Some v -> v
-    | None -> raise (Typer.Error (UnresolvedIdent i, pos)) )
+  | TEIdent id -> (
+    match find_var ctx id with
+    | Some v -> Llvm.build_load v id ctx.gen_builder
+    | None -> raise (Typer.Error (UnresolvedIdent id, pos)) )
+  | TEVar (_, name, v) ->
+      let v = gen_expr ctx v in
+      let ptr = Llvm.build_alloca (type_of v) name ctx.gen_builder in
+      set_var ctx name ptr ; v
   | TEBinOp (OpEq, a, b) ->
       let a_val = gen_expr ctx a in
       let b_val = gen_expr ctx b in
@@ -206,7 +210,11 @@ let gen_typedef ctx (meta, _) =
           List.iteri
             (fun index arg ->
               let param = Llvm.param func index in
-              set_var ctx arg.aname param )
+              let ptr =
+                build_alloca (type_of param) arg.aname ctx.gen_builder
+              in
+              let _ = build_store param ptr ctx.gen_builder in
+              set_var ctx arg.aname ptr )
             args ;
           let meta, _ = ex in
           let va = gen_expr ctx ex in
