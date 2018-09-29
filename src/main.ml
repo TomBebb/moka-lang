@@ -17,7 +17,7 @@ let _ =
   let stream =
     lex_stream
       "struct HelloWorld { static func add(a: int, b: int): int { a + b } \
-       static func main(): void { var res = 12 + 12 } }"
+       static func main(): int { 0 } }"
   in
   Printexc.record_backtrace true ;
   let _ =

@@ -7,6 +7,7 @@
    llvm.executionengine
    llvm.target
    llvm.scalar_opts
+   llvm.all_backends
    stdio
    sedlex
    menhirLib
