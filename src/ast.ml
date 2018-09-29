@@ -32,11 +32,11 @@ type expr_def =
 
 and expr = expr_def span
 
-type arg = {aname: string; atype: ty}
+type param = {pname: string; ptype: ty}
 
 type member_kind =
   | MVar of ty option * expr option
-  | MFunc of arg list * ty * expr
+  | MFunc of param list * ty * expr
 
 type member_mod = MStatic | MPublic | MPrivate
 

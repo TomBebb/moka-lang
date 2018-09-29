@@ -181,12 +181,12 @@ let pre_gen_typedef ctx (meta, _) =
           else push llty
       | TMFunc ([], TPrim TInt, _) when is_static && field.tmname = "main" ->
           ()
-      | TMFunc (args, ret, _) ->
-          let llargs = ref (if is_static then [] else [ctx.gen_local]) in
-          let args = List.map (fun a -> gen_ty ctx a.atype) args in
-          List.iter (fun arg -> llargs := !llargs @ [arg]) args ;
+      | TMFunc (params, ret, _) ->
+          let llpars = ref (if is_static then [] else [ctx.gen_local]) in
+          let params = List.map (fun param -> gen_ty ctx param.ptype) params in
+          List.iter (fun param -> llpars := !llpars @ [param]) params ;
           let sig_ty =
-            Llvm.function_type (gen_ty ctx ret) (Array.of_list !llargs)
+            Llvm.function_type (gen_ty ctx ret) (Array.of_list !llpars)
           in
           let _ = Llvm.declare_function name sig_ty ctx.gen_mod in
           () )
@@ -222,13 +222,13 @@ let gen_typedef ctx (meta, _) =
           Llvm.position_at_end entry ctx.gen_builder ;
           enter_block ctx ;
           List.iteri
-            (fun index arg ->
+            (fun index par ->
               let param = Llvm.param func index in
               let ptr =
-                build_alloca (type_of param) arg.aname ctx.gen_builder
+                build_alloca (type_of param) par.pname ctx.gen_builder
               in
               let _ = build_store param ptr ctx.gen_builder in
-              set_var ctx arg.aname ptr )
+              set_var ctx par.pname ptr )
             args ;
           let meta, _ = ex in
           let va = gen_expr ctx ex in

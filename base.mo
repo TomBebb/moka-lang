@@ -1,5 +1,8 @@
 class Main {
+	static func add(a: int, b: int): int
+		a + b
+
 	static func main(): int {
-		0
+		add(2, 3)
 	}
 }

@@ -20,7 +20,7 @@ and ty_expr = ty_expr_meta span
 
 type ty_member_kind =
   | TMVar of ty * ty_expr option
-  | TMFunc of arg list * ty * ty_expr
+  | TMFunc of param list * ty * ty_expr
 
 type ty_member_def =
   {tmname: string; tmkind: ty_member_kind; tmmods: MemberMods.t}
@@ -111,7 +111,7 @@ let rec type_expr ctx ex =
     | MVar (Some ty, _) -> ty
     | MVar (None, Some ex) -> ty_of (type_expr ctx ex)
     | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
-    | MFunc (args, ret, _) -> TFunc (List.map (fun arg -> arg.atype) args, ret)
+    | MFunc (params, ret, _) -> TFunc (List.map (fun par -> par.ptype) params, ret)
   in
   let edef, pos = ex in
   let mk def ty =
@@ -198,12 +198,12 @@ let type_member ctx (def, pos) =
         let ex = type_expr ctx ex in
         TMVar (ty_of ex, Some ex)
     | MVar (None, None) -> raise (Error (UnresolvedFieldType def.mname, pos))
-    | MFunc (args, ret, body) ->
+    | MFunc (params, ret, body) ->
         let _ = enter_block ctx in
-        List.iter (fun arg -> set_var ctx arg.aname arg.atype) args ;
+        List.iter (fun par -> set_var ctx par.pname par.ptype) params ;
         let body = type_expr ctx body in
         let _ = leave_block ctx in
-        TMFunc (args, ret, body)
+        TMFunc (params, ret, body)
   in
   ({tmkind= kind; tmname= def.mname; tmmods= def.mmods}, pos)
 

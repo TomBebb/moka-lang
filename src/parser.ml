@@ -112,6 +112,7 @@ let rec parse_expr tks =
         let name, last = field in
         let _, first = base in
         parse_after_expr (mk_pos (EField (base, name)) first last) tks
+
     | Some (TBinOp op, _) ->
         let _ = Stream.next tks in
         let other = parse_expr tks in
@@ -141,17 +142,17 @@ let rec parse_member_mods tks mods =
       parse_member_mods tks mods
   | _ -> ()
 
-let rec parse_args tks term =
+let rec parse_params tks term =
   if next_is tks term then []
   else
     let name, _ = expect_ident tks in
-    let _ = expect tks [TColon] "arguments" in
+    let _ = expect tks [TColon] "parameters" in
     let ty = parse_ty tks in
-    let arg = {aname= name; atype= ty} in
+    let param = {pname= name; ptype= ty} in
     if next_is tks TComma then
-      let _ = expect tks [TComma] "args" in
-      arg :: parse_args tks term
-    else [arg]
+      let _ = expect tks [TComma] "parameters" in
+      param :: parse_params tks term
+    else [param]
 
 let parse_member tks =
   let mods = ref MemberMods.empty in
@@ -162,7 +163,7 @@ let parse_member tks =
   | TKeyword KFunc ->
       let name, _ = expect_ident tks in
       let _ = expect tks [TOpenParen] "function declaration" in
-      let args = parse_args tks TCloseParen in
+      let args = parse_params tks TCloseParen in
       let _ = expect tks [TCloseParen] "function declaration" in
       let ret =
         if next_is tks TColon then
