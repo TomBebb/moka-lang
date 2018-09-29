@@ -5,7 +5,6 @@ before_script:
   - sudo apt-get install -y llvm-7-dev
   - sh <(curl -sL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh)
   - opam init
-before_install:
   - opam install llvm base stdio sedlex dune
 
 script:
