@@ -244,13 +244,20 @@ let gen_typedef ctx (meta, _) =
       | _ -> () )
     meta.temembers
 
-let run ctx =
-  List.iter (fun t -> print_endline (Target.name t)) (Target.all ()) ;
+let build ctx output_file =
   let triple = Target.default_triple () in
   let target = Target.by_triple triple in
   let target_mach = TargetMachine.create ~triple target in
-  TargetMachine.emit_to_file ctx.gen_mod CodeGenFileType.ObjectFile "main"
-    target_mach
+  let object_file = output_file ^ ".o" in
+  if Sys.file_exists object_file then
+    raise (Falure "object file already exists!") ;
+  TargetMachine.emit_to_file ctx.gen_mod CodeGenFileType.ObjectFile object_file
+    target_mach ;
+  if
+    Sys.command (Printf.sprintf "gcc -o %s %s -lgc" output_file object_file)
+    == 1
+  then raise (Failure "failed to link") ;
+  Sys.remove object_file
 
 let uninit ctx =
   dispose_module ctx.gen_mod ;

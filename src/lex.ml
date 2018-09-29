@@ -80,8 +80,8 @@ let rec token buf =
               (Unexpected
                  (Sedlexing.lexeme_char buf (Sedlexing.lexeme_start buf)))))
 
-let lex_stream text =
-  let buf = Sedlexing.Utf8.from_string text in
+let lex_stream ch =
+  let buf = Sedlexing.Utf8.from_channel ch in
   let was_eof = ref false in
   Stream.from (fun _ ->
       if !was_eof then None
