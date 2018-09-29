@@ -59,11 +59,17 @@ let parse_ty tks =
   | _ -> raise (Error (mk_one (Unexpected (def, "type")) pos))
 
 let rec parse_expr tks =
-  let rec parse_exprs tks term =
+  let rec parse_exprs tks term sep =
     if next_is tks term then []
     else
-      let ex = parse_expr tks in
-      [ex] @ parse_exprs tks term
+      let ex : expr = parse_expr tks in
+      let peek : token span option = Stream.peek tks in
+      match (sep, peek) with
+      | None, Some (_, _) -> [ex] @ parse_exprs tks term None
+      | Some sep, Some (tk, _) when tk = sep ->
+          ignore (Stream.next tks) ;
+          [ex] @ parse_exprs tks term (Some sep)
+      | _ -> [ex]
   in
   let parse_base_expr tks =
     let first, first_pos = Stream.next tks in
@@ -88,7 +94,7 @@ let rec parse_expr tks =
         let last = expect tks [TCloseParen] "parenthesis" in
         mk_pos (EParen inner) first_pos last
     | TOpenBrace ->
-        let exs = parse_exprs tks TCloseBrace in
+        let exs = parse_exprs tks TCloseBrace None in
         let last = expect tks [TCloseBrace] "block" in
         mk_pos (EBlock exs) first_pos last
     | TKeyword KIf ->
@@ -112,7 +118,12 @@ let rec parse_expr tks =
         let name, last = field in
         let _, first = base in
         parse_after_expr (mk_pos (EField (base, name)) first last) tks
-
+    | Some (TOpenParen, _) ->
+        let _ = Stream.next tks in
+        let args = parse_exprs tks TCloseParen (Some TComma) in
+        let last = expect tks [TCloseParen] "function call" in
+        let _, first = base in
+        mk_pos (ECall (base, args)) first last
     | Some (TBinOp op, _) ->
         let _ = Stream.next tks in
         let other = parse_expr tks in

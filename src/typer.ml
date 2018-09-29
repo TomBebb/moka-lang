@@ -23,7 +23,7 @@ type ty_member_kind =
   | TMFunc of param list * ty * ty_expr
 
 type ty_member_def =
-  {tmname: string; tmkind: ty_member_kind; tmmods: MemberMods.t}
+  {tmname: string; tmkind: ty_member_kind; tmmods: MemberMods.t; tmty: ty}
 
 type ty_member = ty_member_def span
 
@@ -43,6 +43,7 @@ type error_kind =
   | CannotField of ty
   | UnresolvedFieldType of string
   | Expected of ty
+  | CannotCall of ty
 
 let error_msg = function
   | UnresolvedIdent s -> "Failed to resolve identifier '" ^ s ^ "'"
@@ -56,14 +57,21 @@ let error_msg = function
   | UnresolvedFieldType name ->
       "Type of field '" ^ name ^ "' could not be resolved"
   | Expected t -> "Expected type " ^ s_ty t
+  | CannotCall t -> "The type " ^ s_ty t ^ " cannot be called"
 
 exception Error of error_kind span
 
 type type_context =
   { tvars: (string, ty) Hashtbl.t Stack.t
-  ; ttypedefs: (path, Ast.type_def) Hashtbl.t }
+  ; ttypedefs: (path, Ast.type_def) Hashtbl.t
+  ; mutable tthis: path option
+  ; mutable tin_static: bool }
 
-let init () = {tvars= Stack.create (); ttypedefs= Hashtbl.create 2}
+let init () =
+  { tvars= Stack.create ()
+  ; ttypedefs= Hashtbl.create 2
+  ; tthis= None
+  ; tin_static= true }
 
 let enter_block ctx = Stack.push (Hashtbl.create 12) ctx.tvars
 
@@ -88,31 +96,7 @@ let ty_of tex =
 
 let set_var ctx name ty = Hashtbl.add (Stack.top ctx.tvars) name ty
 
-let find_var ctx name =
-  let res = ref None in
-  Stack.iter
-    (fun tbl ->
-      match Hashtbl.find_opt tbl name with
-      | Some v -> res := Some v
-      | None -> () )
-    ctx.tvars ;
-  !res
-
-let type_of_const = function
-  | CInt _ -> TInt
-  | CFloat _ -> TFloat
-  | CString _ -> TShort
-  | CBool _ -> TBool
-  | CNull -> TVoid
-
 let rec type_expr ctx ex =
-  let type_of_member ctx (def, pos) =
-    match def.mkind with
-    | MVar (Some ty, _) -> ty
-    | MVar (None, Some ex) -> ty_of (type_expr ctx ex)
-    | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
-    | MFunc (params, ret, _) -> TFunc (List.map (fun par -> par.ptype) params, ret)
-  in
   let edef, pos = ex in
   let mk def ty =
     ({edef= def; ety= ty}, {pfile= pos.pfile; pmin= pos.pmin; pmax= pos.pmax})
@@ -120,9 +104,10 @@ let rec type_expr ctx ex =
   match edef with
   | EConst c -> mk (TEConst c) (TPrim (type_of_const c))
   | EIdent id -> (
-    match find_var ctx id with
-    | Some v -> mk (TEIdent id) v
-    | None -> raise (Error (UnresolvedIdent id, pos)) )
+      let v = find_var ctx id in
+      match v with
+      | Some v -> mk (TEIdent id) v
+      | None -> raise (Error (UnresolvedIdent id, pos)) )
   | EVar (t, name, v) ->
       let v = type_expr ctx v in
       mk (TEVar (t, name, v)) (TPrim TVoid)
@@ -167,7 +152,11 @@ let rec type_expr ctx ex =
   | ECall (func, args) ->
       let func = type_expr ctx func in
       let args = List.map (type_expr ctx) args in
-      mk (TECall (func, args)) (TPrim TVoid)
+      mk
+        (TECall (func, args))
+        ( match ty_of func with
+        | TFunc (_, ret) -> ret
+        | t -> raise (Error (CannotCall t, pos)) )
   | EIf (cond, if_e, None) ->
       let cond = type_expr ctx cond in
       let if_e = type_expr ctx if_e in
@@ -190,7 +179,45 @@ let rec type_expr ctx ex =
         raise (Error (Expected (TPrim TBool), pos)) ;
       mk (TEWhile (cond, body)) (TPrim TVoid)
 
+and type_of_member ctx (def, pos) =
+  match def.mkind with
+  | MVar (Some ty, _) -> ty
+  | MVar (None, Some ex) -> ty_of (type_expr ctx ex)
+  | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
+  | MFunc (params, ret, _) ->
+      TFunc (List.map (fun par -> par.ptype) params, ret)
+
+and find_var ctx name =
+  let res = ref None in
+  Stack.iter
+    (fun tbl ->
+      if !res != None then ()
+      else
+        match Hashtbl.find_opt tbl name with
+        | Some v -> res := Some v
+        | None -> () )
+    ctx.tvars ;
+  let this =
+    match ctx.tthis with
+    | Some t -> t
+    | None -> raise (Failure "No this vlaue")
+  in
+  let def, _ = Hashtbl.find ctx.ttypedefs this in
+  List.iter
+    (fun (meta, pos) ->
+      if meta.mname = name then res := Some (type_of_member ctx (meta, pos)) )
+    def.emembers ;
+  !res
+
+and type_of_const = function
+  | CInt _ -> TInt
+  | CFloat _ -> TFloat
+  | CString _ -> TShort
+  | CBool _ -> TBool
+  | CNull -> TVoid
+
 let type_member ctx (def, pos) =
+  ctx.tin_static <- MemberMods.mem MStatic def.mmods ;
   let kind =
     match def.mkind with
     | MVar (Some ty, None) -> TMVar (ty, None)
@@ -205,9 +232,15 @@ let type_member ctx (def, pos) =
         let _ = leave_block ctx in
         TMFunc (params, ret, body)
   in
-  ({tmkind= kind; tmname= def.mname; tmmods= def.mmods}, pos)
+  ( { tmkind= kind
+    ; tmname= def.mname
+    ; tmmods= def.mmods
+    ; tmty= type_of_member ctx (def, pos) }
+  , pos )
 
 let type_type_def ctx (def, pos) =
+  ctx.tthis <- Some def.epath ;
+  Hashtbl.add ctx.ttypedefs def.epath (def, pos) ;
   ( { tepath= def.epath
     ; tekind= def.ekind
     ; temods= def.emods
