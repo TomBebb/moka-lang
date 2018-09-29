@@ -10,7 +10,10 @@ let error_msg = function UnresolvedLHS -> "unresolved RHS"
 
 exception Error of error_kind span
 
-type gen_def_meta = {dstruct: lltype; dfield_indicies: (string, int) Hashtbl.t}
+type gen_def_meta =
+  { dstruct: lltype
+  ; dfield_indicies: (string, int) Hashtbl.t
+  ; dstatics: (string, llvalue) Hashtbl.t }
 
 type gen_ctx =
   { gen_ctx: llcontext
@@ -49,7 +52,10 @@ let leave_block ctx = Stack.pop ctx.gen_vars
 
 let get err_msg = function None -> raise (Failure err_msg) | Some v -> v
 
-let member_name _ path field = s_path path ^ "_" ^ field
+let member_name _ path field =
+  match Hashtbl.find_opt field.tmatts "LinkName" with
+  | Some (CString name) when MemberMods.mem MStatic field.tmmods -> name
+  | _ -> s_path path ^ "_" ^ field.tmname
 
 let find_var ctx name should_load =
   let res = ref None in
@@ -62,12 +68,9 @@ let find_var ctx name should_load =
       | None -> () )
     ctx.gen_vars ;
   let local_path = get "no local path" ctx.gen_local_path in
-  let global_name = member_name ctx local_path name in
-  ( match lookup_global global_name ctx.gen_mod with
-  | Some g -> res := Some g
-  | None -> () ) ;
-  ( match lookup_function global_name ctx.gen_mod with
-  | Some g -> res := Some g
+  let local_meta = Hashtbl.find ctx.gen_typedefs local_path in
+  ( match Hashtbl.find_opt local_meta.dstatics name with
+  | Some s -> res := Some s
   | None -> () ) ;
   !res
 
@@ -182,19 +185,20 @@ let rec gen_expr ctx (def, pos) =
 let pre_gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
   let types = Array.of_list [] in
-  let indices = Hashtbl.create 0 in
+  let indices = Hashtbl.create 16 in
   let push ty = types.(Array.length types) <- ty in
+  let statics = Hashtbl.create 16 in
   ctx.gen_local_path <- Some meta.tepath ;
   List.iter
     (fun (field, _) ->
       let is_static = MemberMods.mem MStatic field.tmmods in
-      let name = member_name ctx meta.tepath field.tmname in
+      let name = member_name ctx meta.tepath field in
       match field.tmkind with
       | TMVar (ty, _) ->
           let llty = gen_ty ctx ty in
           if is_static then
-            let _ = Llvm.declare_global llty name ctx.gen_mod in
-            ()
+            let global = Llvm.declare_global llty name ctx.gen_mod in
+            Hashtbl.add statics field.tmname global
           else (
             Hashtbl.add indices field.tmname (Array.length types) ;
             push llty )
@@ -212,14 +216,16 @@ let pre_gen_typedef ctx (meta, _) =
           let sig_ty =
             Llvm.function_type (gen_ty ctx ret) (Array.of_list !llpars)
           in
-          let _ = Llvm.declare_function name sig_ty ctx.gen_mod in
-          () )
+          let func = Llvm.declare_function name sig_ty ctx.gen_mod in
+          Hashtbl.add statics field.tmname func )
     meta.temembers ;
   match meta.tekind with
   | EClass _ | EStruct ->
       let gen = Llvm.named_struct_type ctx.gen_ctx (s_path meta.tepath) in
       struct_set_body gen types false ;
-      let dmeta = {dstruct= gen; dfield_indicies= indices} in
+      let dmeta =
+        {dstruct= gen; dfield_indicies= indices; dstatics= statics}
+      in
       Hashtbl.add ctx.gen_typedefs meta.tepath dmeta
 
 let gen_typedef ctx (meta, _) =
@@ -228,14 +234,15 @@ let gen_typedef ctx (meta, _) =
   List.iter
     (fun (field, _) ->
       let is_static = MemberMods.mem MStatic field.tmmods in
-      let name = member_name ctx meta.tepath field.tmname in
+      let name = member_name ctx meta.tepath field in
       match field.tmkind with
       | TMVar (_, Some va) when is_static ->
           let global =
             get "global not found" (lookup_global name ctx.gen_mod)
           in
           set_initializer global (gen_expr ctx va)
-      | TMFunc (args, ret, ex) ->
+      | TMFunc (args, ret, ex) when not (MemberMods.mem MExtern field.tmmods)
+        ->
           let is_main = is_static && field.tmname = "main" && args = [] in
           let func, entry =
             if is_main then (ctx.gen_main, Llvm.entry_block ctx.gen_main)

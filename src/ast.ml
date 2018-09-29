@@ -11,7 +11,9 @@ type binop = OpAdd | OpSub | OpMul | OpDiv | OpAssign | OpEq
 
 type unop = OpNeg | OpNot
 
-type pos = {pfile: string; pmin: int; pmax: int}
+type pos_detail = {pline: int; pcol: int}
+
+type pos = {pfile: string; pmin: pos_detail; pmax: pos_detail}
 
 type 'a span = 'a * pos
 
@@ -38,7 +40,7 @@ type member_kind =
   | MVar of ty option * expr option
   | MFunc of param list * ty * expr
 
-type member_mod = MStatic | MPublic | MPrivate
+type member_mod = MStatic | MPublic | MPrivate | MExtern
 
 module MemberMods = Set.Make (struct
   let compare = Pervasives.compare
@@ -46,7 +48,11 @@ module MemberMods = Set.Make (struct
   type t = member_mod
 end)
 
-type member_def = {mname: string; mkind: member_kind; mmods: MemberMods.t}
+type member_def =
+  { mname: string
+  ; mkind: member_kind
+  ; mmods: MemberMods.t
+  ; matts: (string, const) Hashtbl.t }
 
 type member = member_def span
 
@@ -66,6 +72,8 @@ type type_def_meta =
   {epath: path; ekind: type_def_kind; emods: ClassMods.t; emembers: member list}
 
 type type_def = type_def_meta span
+
+let s_pos p = Printf.sprintf "%s: %d:%d" p.pfile p.pmin.pline p.pmin.pcol
 
 let s_const = function
   | CInt i -> string_of_int i

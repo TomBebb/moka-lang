@@ -23,7 +23,11 @@ type ty_member_kind =
   | TMFunc of param list * ty * ty_expr
 
 type ty_member_def =
-  {tmname: string; tmkind: ty_member_kind; tmmods: MemberMods.t; tmty: ty}
+  { tmname: string
+  ; tmkind: ty_member_kind
+  ; tmmods: MemberMods.t
+  ; tmty: ty
+  ; tmatts: (string, const) Hashtbl.t }
 
 type ty_member = ty_member_def span
 
@@ -235,6 +239,7 @@ let type_member ctx (def, pos) =
   ( { tmkind= kind
     ; tmname= def.mname
     ; tmmods= def.mmods
+    ; tmatts= def.matts
     ; tmty= type_of_member ctx (def, pos) }
   , pos )
 

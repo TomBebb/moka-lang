@@ -133,8 +133,30 @@ let rec parse_expr tks =
   let base = parse_base_expr tks in
   parse_after_expr base tks
 
+let expect_const tks =
+  let def, pos = Stream.next tks in
+  match def with
+  | TConst c -> c
+  | _ -> raise (Error (mk_one (Unexpected (def, "constant")) pos))
+
+let parse_atts tks =
+  let atts = Hashtbl.create 5 in
+  while next_is tks TAt do
+    ignore (Stream.next tks) ;
+    let name, _ = expect_ident tks in
+    ignore (expect tks [TOpenParen] "attribute") ;
+    let v = expect_const tks in
+    ignore (expect tks [TCloseParen] "attribute") ;
+    Printf.printf "Parsed attr: %s = %s\n" name (s_const v) ;
+    Hashtbl.add atts name v
+  done ;
+  atts
+
 let parse_member_mod tks =
   match Stream.peek tks with
+  | Some (TKeyword KExtern, _) ->
+      let _ = Stream.next tks in
+      Some MExtern
   | Some (TKeyword KStatic, _) ->
       let _ = Stream.next tks in
       Some MStatic
@@ -166,8 +188,12 @@ let rec parse_params tks term =
     else [param]
 
 let parse_member tks =
+  let atts = parse_atts tks in
   let mods = ref MemberMods.empty in
   parse_member_mods tks mods ;
+  let is_extern =
+    MemberMods.mem MExtern !mods && MemberMods.mem MStatic !mods
+  in
   let tk = Stream.next tks in
   let def, pos = tk in
   match def with
@@ -182,8 +208,9 @@ let parse_member tks =
           parse_ty tks
         else TPrim TVoid
       in
-      let ex = parse_expr tks in
-      ({mname= name; mkind= MFunc (args, ret, ex); mmods= !mods}, pos)
+      let ex = if is_extern then (EBlock [], pos) else parse_expr tks in
+      ( {mname= name; mkind= MFunc (args, ret, ex); mmods= !mods; matts= atts}
+      , pos )
   | TKeyword KVar ->
       let name, _ = expect_ident tks in
       let ty =
@@ -198,7 +225,7 @@ let parse_member tks =
           Some (parse_expr tks)
         else None
       in
-      ({mname= name; mkind= MVar (ty, ex); mmods= !mods}, pos)
+      ({mname= name; mkind= MVar (ty, ex); mmods= !mods; matts= atts}, pos)
   | _ -> raise (Error (mk_one (Unexpected (def, "member")) pos))
 
 let rec parse_members tks term =

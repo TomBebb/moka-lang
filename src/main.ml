@@ -1,14 +1,19 @@
+open Ast
 open Lex
 open Parser
 open Codegen
+open Printf
 
 (* register exception printers *)
 let () =
   Printexc.register_printer (function
-    | Typer.Error (kind, _) ->
-        Some (Printf.sprintf "Typer error: %s" (Typer.error_msg kind))
-    | Parser.Error (kind, _) ->
-        Some (Printf.sprintf "Parser error: %s" (Parser.error_msg kind))
+    | Lex.Error (kind, pos) ->
+        Some (sprintf "%s: Lexer error: %s" (s_pos pos) (Lex.error_msg kind))
+    | Typer.Error (kind, pos) ->
+        Some (sprintf "%s: Typer error: %s" (s_pos pos) (Typer.error_msg kind))
+    | Parser.Error (kind, pos) ->
+        Some
+          (sprintf "%s: Parser error: %s" (s_pos pos) (Parser.error_msg kind))
     | _ -> None (* for other exceptions *) )
 
 let verbose = ref false
@@ -36,7 +41,7 @@ let _ =
     match !main_source with
     | Some out when not (Sys.file_exists out) ->
         raise (Failure (Printf.sprintf "Main file not found: %s" out))
-    | Some out -> open_in out
+    | Some out -> out
     | _ -> raise (Failure "No main file given")
   in
   let stream = lex_stream ch in

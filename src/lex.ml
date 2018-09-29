@@ -2,28 +2,58 @@ open Ast
 open Token
 open Type
 
-type error_kind = Unexpected of int
+type error_kind = Unexpected of int | UnexpectedEof of string
 
 let error_msg = function
   | Unexpected got ->
       "Unexpected '" ^ String.make 1 (char_of_int got) ^ "' while lexing"
+  | UnexpectedEof lexing -> "Unexpected end of file while lexing " ^ lexing
 
 exception Error of error_kind span
+
+type cursor = {lfile: string; mutable lline: int; mutable lline_start: int}
+
+let init_cursor file = {lfile= file; lline= 1; lline_start= 0}
+
+let curr = ref (init_cursor "")
 
 let digit = [%sedlex.regexp? '0' .. '9']
 
 let int = [%sedlex.regexp? Plus digit]
 
+let float = [%sedlex.regexp? Plus digit, '.', Plus digit]
+
 let letter = [%sedlex.regexp? 'a' .. 'z' | 'A' .. 'Z']
 
-let rec token buf =
-  let mk tk =
-    ( tk
-    , { pmin= Sedlexing.lexeme_start buf
-      ; pmax= Sedlexing.lexeme_end buf
-      ; pfile= "???" } )
+let mk buf tk =
+  let resolve_offset offset =
+    if offset >= !curr.lline_start then
+      {pline= !curr.lline; pcol= offset - !curr.lline_start + 1}
+    else {pline= !curr.lline; pcol= 0}
   in
+  ( tk
+  , { pmin= resolve_offset (Sedlexing.lexeme_start buf)
+    ; pmax= resolve_offset (Sedlexing.lexeme_end buf)
+    ; pfile= !curr.lfile } )
+
+let mk_err buf tk =
+  let resolve_offset offset =
+    if offset >= !curr.lline_start then
+      {pline= !curr.lline; pcol= offset - !curr.lline_start + 1}
+    else {pline= !curr.lline; pcol= 0}
+  in
+  ( tk
+  , { pmin= resolve_offset (Sedlexing.lexeme_start buf)
+    ; pmax= resolve_offset (Sedlexing.lexeme_end buf)
+    ; pfile= !curr.lfile } )
+
+let rec token buf =
+  let mk : 'a -> 'a span = mk buf in
   match%sedlex buf with
+  | '\n' ->
+      !curr.lline <- !curr.lline + 1 ;
+      !curr.lline_start <- Sedlexing.lexeme_end buf ;
+      token buf
   | white_space -> token buf
   | "void" -> mk (TKPrim TVoid)
   | "bool" -> mk (TKPrim TBool)
@@ -35,6 +65,7 @@ let rec token buf =
   | "class" -> mk (TKeyword KClass)
   | "interface" -> mk (TKeyword KInterface)
   | "struct" -> mk (TKeyword KStruct)
+  | "extern" -> mk (TKeyword KExtern)
   | "enum" -> mk (TKeyword KEnum)
   | "extends" -> mk (TKeyword KExtends)
   | "implements" -> mk (TKeyword KImplements)
@@ -54,8 +85,7 @@ let rec token buf =
   | "this" -> mk (TKeyword KThis)
   | "null" -> mk (TKeyword KNull)
   | int -> mk (TConst (CInt (int_of_string (Sedlexing.Utf8.lexeme buf))))
-  | letter, Star ('A' .. 'Z' | 'a' .. 'z' | digit) ->
-      mk (TIdent (Sedlexing.Utf8.lexeme buf))
+  | float -> mk (TConst (CFloat (float_of_string (Sedlexing.Utf8.lexeme buf))))
   | '.' -> mk TDot
   | ',' -> mk TComma
   | ':' -> mk TColon
@@ -65,6 +95,7 @@ let rec token buf =
   | ']' -> mk TCloseBracket
   | '{' -> mk TOpenBrace
   | '}' -> mk TCloseBrace
+  | '@' -> mk TAt
   | '+' -> mk (TBinOp OpAdd)
   | '-' -> mk (TBinOp OpSub)
   | '*' -> mk (TBinOp OpMul)
@@ -72,15 +103,38 @@ let rec token buf =
   | '!' -> mk (TUnOp OpNot)
   | "==" -> mk (TBinOp OpEq)
   | '=' -> mk (TBinOp OpAssign)
+  | '"' ->
+      let strbuf = Buffer.create 1 in
+      mk (TConst (CString (string1 strbuf buf)))
+  | letter, Star (letter | digit | '_') ->
+      mk (TIdent (Sedlexing.Utf8.lexeme buf))
   | eof -> mk TEof
   | _ ->
       raise
         (Error
-           (mk
+           (mk_err buf
               (Unexpected
                  (Sedlexing.lexeme_char buf (Sedlexing.lexeme_start buf)))))
 
-let lex_stream ch =
+and string1 strbuf buf =
+  let mk = mk buf in
+  match%sedlex buf with
+  | '"' -> Buffer.contents strbuf
+  | "\\r" ->
+      Buffer.add_char strbuf '\r' ;
+      string1 strbuf buf
+  | "\\n" ->
+      Buffer.add_char strbuf '\n' ;
+      string1 strbuf buf
+  | eof -> raise (Error (mk (UnexpectedEof "string")))
+  | any ->
+      Buffer.add_string strbuf (Sedlexing.Utf8.lexeme buf) ;
+      string1 strbuf buf
+  | _ -> raise (Failure "failed to lex string")
+
+let lex_stream file =
+  curr := init_cursor file ;
+  let ch = open_in file in
   let buf = Sedlexing.Utf8.from_channel ch in
   let was_eof = ref false in
   Stream.from (fun _ ->

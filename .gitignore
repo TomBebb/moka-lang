@@ -10,6 +10,8 @@ _build
 *.odocl
 *.install
 *.merlin
+*.o
+**/main
 
 # config files; don't track unless they contain manual modifications
 # _tags

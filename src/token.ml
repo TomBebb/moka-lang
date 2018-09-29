@@ -14,6 +14,7 @@ type keyword =
   | KVar
   | KVal
   | KFunc
+  | KExtern
   (* modifiers *)
   | KStatic
   | KPublic
@@ -45,6 +46,7 @@ type token =
   | TCloseBracket
   | TOpenBrace
   | TCloseBrace
+  | TAt
   | TEof
 
 let s_keyword = function
@@ -60,6 +62,7 @@ let s_keyword = function
   | KVar -> "var"
   | KVal -> "val"
   | KFunc -> "func"
+  | KExtern -> "extern"
   (* modifiers *)
   | KStatic -> "static"
   | KPublic -> "public"
@@ -91,6 +94,7 @@ let s_token_def = function
   | TKPrim p -> s_primitive_ty p
   | TBinOp op -> s_binop op
   | TUnOp op -> s_unop op
+  | TAt -> "@"
   | TEof -> "<end of file>"
 
 let s_token (tk, _) = s_token_def tk

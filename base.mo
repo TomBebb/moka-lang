@@ -1,8 +1,9 @@
 class Main {
-	static func add(a: int, b: int): int
-		a + b
+	@LinkName("llvm.sqrt.f32")
+	static extern func sqrt(v: float): float
 
 	static func main(): int {
-		add(2, 3)
+		var a = sqrt(5.0)
+		0
 	}
 }
