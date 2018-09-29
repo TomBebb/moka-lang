@@ -250,7 +250,7 @@ let build ctx output_file =
   let target_mach = TargetMachine.create ~triple target in
   let object_file = output_file ^ ".o" in
   if Sys.file_exists object_file then
-    raise (Falure "object file already exists!") ;
+    raise (Failure "object file already exists!") ;
   TargetMachine.emit_to_file ctx.gen_mod CodeGenFileType.ObjectFile object_file
     target_mach ;
   if

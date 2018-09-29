@@ -10,7 +10,6 @@
    llvm.all_backends
    stdio
    sedlex
-   menhirLib
  )
  (preprocess (pps ppx_deriving.std ppx_enumerate sedlex.ppx))
 )

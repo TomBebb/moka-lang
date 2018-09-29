@@ -1,0 +1,13 @@
+language: generic
+before_script:
+  - echo "deb http://apt.llvm.org/trusty/ llvm-toolchain-trusty-7 main" | sudo tee -a /etc/apt/sources.list
+  - sudo apt-get update -qq
+  - sudo apt-get install -y llvm-7-dev
+  - sh <(curl -sL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh)
+  - opam init
+before_install:
+  - opam install llvm base stdio sedlex dune
+
+script:
+  - dune build src/main.exe
+  - _build/default/src/main.exe -m base.mo
