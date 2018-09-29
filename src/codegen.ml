@@ -2,6 +2,7 @@ open Llvm
 open Type
 open Typer
 open Ast
+open Ctypes
 
 type error_kind = UnresolvedLHS
 
@@ -24,6 +25,8 @@ type gen_ctx =
   ; gen_typedefs: (path, gen_def_meta) Hashtbl.t }
 
 let init () =
+  if not (Llvm_executionengine.initialize ()) then
+    Printf.eprintf "Executino engine could not be initialized" ;
   let ctx = create_context () in
   let main_mod = create_module ctx "main" in
   let builder = builder ctx in
@@ -100,6 +103,7 @@ let rec gen_expr ctx (def, pos) =
   | TEVar (_, name, v) ->
       let v = gen_expr ctx v in
       let ptr = Llvm.build_alloca (type_of v) name ctx.gen_builder in
+      let _ = Llvm.build_store v ptr ctx.gen_builder in
       set_var ctx name ptr ; v
   | TEBinOp (OpEq, a, b) ->
       let a_val = gen_expr ctx a in
@@ -176,6 +180,8 @@ let pre_gen_typedef ctx (meta, _) =
             let _ = Llvm.declare_global llty name ctx.gen_mod in
             ()
           else push llty
+      | TMFunc ([], TPrim TVoid, _) when is_static && field.tmname = "main" ->
+          ()
       | TMFunc (args, ret, _) ->
           let llargs = ref (if is_static then [] else [ctx.gen_local]) in
           let args = List.map (fun a -> gen_ty ctx a.atype) args in
@@ -202,8 +208,13 @@ let gen_typedef ctx (meta, _) =
           let global = get (lookup_global name ctx.gen_mod) in
           set_initializer global (gen_expr ctx va)
       | TMFunc (args, ret, ex) ->
-          let func = get (lookup_function name ctx.gen_mod) in
-          let entry = append_block ctx.gen_ctx "entry" func in
+          let func, entry =
+            if is_static && field.tmname = "main" && args = [] then
+              (ctx.gen_main, Llvm.entry_block ctx.gen_main)
+            else
+              let func = get (lookup_function name ctx.gen_mod) in
+              (func, append_block ctx.gen_ctx "entry" func)
+          in
           ctx.gen_func <- func ;
           Llvm.position_at_end entry ctx.gen_builder ;
           enter_block ctx ;
@@ -229,6 +240,23 @@ let gen_typedef ctx (meta, _) =
           ()
       | _ -> () )
     meta.temembers
+
+let run ctx =
+  print_endline "Making JIT" ;
+  let jit = Llvm_executionengine.create ctx.gen_mod in
+  Llvm_executionengine.run_static_ctors jit ;
+  print_endline "Pre-calling main" ;
+  let func_ty = void @-> returning void in
+  let ptr_ty =
+    Foreign.funptr ~abi:Libffi_abi.default_abi ~name:"main" func_ty
+  in
+  print_endline "Finding main" ;
+  let ptr = Llvm_executionengine.get_function_address "main" ptr_ty jit in
+  print_endline "Calling main" ;
+  ptr () ;
+  print_endline "Disposing JIT" ;
+  Llvm_executionengine.run_static_dtors jit ;
+  Llvm_executionengine.dispose jit
 
 let uninit ctx =
   dispose_module ctx.gen_mod ;

@@ -30,7 +30,8 @@ let _ =
           print_endline "Generating" ;
           let _ = Codegen.pre_gen_typedef gen typed in
           let _ = Codegen.gen_typedef gen typed in
-          Llvm.dump_module gen.gen_mod )
+          Llvm.dump_module gen.gen_mod ;
+          Codegen.run gen )
     with e ->
       let msg = Printexc.to_string e in
       let stack = Printexc.get_backtrace () in
