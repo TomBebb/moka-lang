@@ -84,13 +84,15 @@ type type_context =
   { tvars: (string, variability * ty) Hashtbl.t Stack.t
   ; ttypedefs: (path, Ast.type_def) Hashtbl.t
   ; mutable tthis: path option
-  ; mutable tin_static: bool }
+  ; mutable tin_static: bool
+  ; mutable tin_constructor: bool }
 
 let init () =
   { tvars= Stack.create ()
   ; ttypedefs= Hashtbl.create 2
   ; tthis= None
-  ; tin_static= true }
+  ; tin_static= true
+  ; tin_constructor= false }
 
 let enter_block ctx = Stack.push (Hashtbl.create 12) ctx.tvars
 
@@ -146,7 +148,12 @@ let rec type_expr ctx ex =
       | Some (Variable, v) -> mk (TEIdent id) v
       | Some (Constant, _) -> raise (Error (CannotAssign, pos))
       | _ -> raise (Error (UnresolvedIdent id, pos)) )
-    | EField _ -> type_expr ctx (edef, pos)
+    | EField (o, f) ->
+        let obj = type_expr ctx o in
+        let member = resolve_field ctx (ty_of obj) f pos in
+        let var, mem = type_of_member ctx member in
+        if var == Variable then mk (TEField (obj, f)) mem
+        else raise (Error (CannotAssign, pos))
     | _ -> raise (Error (InvalidLHS, pos))
   in
   match edef with
@@ -281,7 +288,9 @@ and find_var ctx name =
   let def, _ = Hashtbl.find ctx.ttypedefs this in
   List.iter
     (fun (meta, pos) ->
-      if meta.mname = name then res := Some (type_of_member ctx (meta, pos)) )
+      if meta.mname = name then
+        let v, ty = type_of_member ctx (meta, pos) in
+        res := Some ((if ctx.tin_constructor then Variable else v), ty) )
     def.emembers ;
   !res
 
@@ -310,9 +319,11 @@ let type_member ctx (def, pos) =
         TMFunc (params, ret, body)
     | MConstr (params, body) ->
         let _ = enter_block ctx in
+        ctx.tin_constructor <- true ;
         List.iter (fun par -> set_var ctx par.pname Constant par.ptype) params ;
         let body = type_expr ctx body in
         let _ = leave_block ctx in
+        ctx.tin_constructor <- false ;
         TMConstr (params, body)
   in
   let _, tmty = type_of_member ctx (def, pos) in

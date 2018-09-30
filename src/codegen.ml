@@ -122,9 +122,16 @@ let rec gen_ty ctx ty =
 let gen_const ctx = function
   | CInt i -> Llvm.const_int (gen_ty ctx (TPrim TInt)) i
   | CFloat f -> Llvm.const_float (gen_ty ctx (TPrim TFloat)) f
-  | CString s -> Llvm.const_stringz ctx.gen_ctx s
+  | CString s ->
+      let c = Llvm.build_global_stringptr (s ^ "\x00") "str" ctx.gen_builder in
+      let instr =
+        build_in_bounds_gep c
+          (Array.of_list [const_int (i32_type ctx.gen_ctx) 0])
+          "str" ctx.gen_builder
+      in
+      dump_value instr ; instr
   | CBool b -> Llvm.const_int (gen_ty ctx (TPrim TBool)) (if b then 1 else 0)
-  | CNull -> Llvm.const_null (void_type ctx.gen_ctx)
+  | CNull -> Llvm.const_pointer_null (void_type ctx.gen_ctx)
 
 let rec gen_expr ctx (def, pos) =
   let gen_expr_lhs ctx (def, pos) =
@@ -246,7 +253,8 @@ let rec gen_expr ctx (def, pos) =
       let res =
         build_call func (Array.of_list !args) "func_res" ctx.gen_builder
       in
-      if ty_of (def, pos) = TPrim TVoid then gen_const ctx CNull else res
+      if classify_type (type_of res) = TypeKind.Void then gen_const ctx CNull
+      else res
   | TENew (path, args) ->
       let meta = Hashtbl.find ctx.gen_typedefs path in
       let constr = Hashtbl.find meta.dstatics "new" in
@@ -316,6 +324,7 @@ let pre_gen_typedef ctx (meta, _) =
             Llvm.function_type (gen_ty ctx ret) (Array.of_list !llpars)
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
+          set_function_call_conv CallConv.fast func ;
           Hashtbl.add
             (if is_static then statics else methods)
             field.tmname func
@@ -459,7 +468,7 @@ let build ctx output_file =
     raise (Failure "object file already exists!") ;
   TargetMachine.emit_to_file ctx.gen_mod CodeGenFileType.ObjectFile object_file
     target_mach ;
-  if Sys.command (sprintf "gcc -o %s %s -lgc" output_file object_file) == 1
+  if Sys.command (sprintf "clang -o %s %s -lgc" output_file object_file) == 1
   then raise (Failure "failed to link") ;
   Sys.remove object_file
 
