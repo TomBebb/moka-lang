@@ -14,6 +14,9 @@ let () =
     | Parser.Error (kind, pos) ->
         Some
           (sprintf "%s: Parser error: %s" (s_pos pos) (Parser.error_msg kind))
+    | Codegen.Error (kind, pos) ->
+        Some
+          (sprintf "%s: Code generation error: %s" (s_pos pos) (Codegen.error_msg kind))
     | _ -> None (* for other exceptions *) )
 
 let verbose = ref false

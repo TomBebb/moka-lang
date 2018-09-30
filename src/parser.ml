@@ -77,11 +77,11 @@ let rec parse_expr tks =
     | TIdent id -> mk_one (EIdent id) first_pos
     | TConst c -> mk_one (EConst c) first_pos
     | TKeyword KNew ->
-      let path = parse_path tks in
-      ignore (expect tks [TOpenParen] "constructor call");
+        let path = parse_path tks in
+        ignore (expect tks [TOpenParen] "constructor call") ;
         let args = parse_exprs tks TCloseParen (Some TComma) in
         let last = expect tks [TCloseParen] "constructor call" in
-      mk_pos (ENew (path, args)) first_pos last
+        mk_pos (ENew (path, args)) first_pos last
     | TKeyword KVar ->
         let name, _ = expect_ident tks in
         let ty =
@@ -204,10 +204,12 @@ let parse_member tks =
   let def, pos = tk in
   match def with
   | TKeyword KFunc ->
-      let (name, _), is_new = if next_is tks (TKeyword KNew) then begin
-        ignore (Stream.next tks);
-        (("new", pos), true)
-      end else (expect_ident tks, false) in
+      let (name, _), is_new =
+        if next_is tks (TKeyword KNew) then (
+          ignore (Stream.next tks) ;
+          (("new", pos), true) )
+        else (expect_ident tks, false)
+      in
       let _ = expect tks [TOpenParen] "function declaration" in
       let args = parse_params tks TCloseParen in
       let _ = expect tks [TCloseParen] "function declaration" in
@@ -218,7 +220,10 @@ let parse_member tks =
         else TPrim TVoid
       in
       let ex = if is_extern then (EBlock [], pos) else parse_expr tks in
-      ( {mname= name; mkind= if is_new then MConstr (args, ex) else MFunc (args, ret, ex); mmods= !mods; matts= atts}
+      ( { mname= name
+        ; mkind= (if is_new then MConstr (args, ex) else MFunc (args, ret, ex))
+        ; mmods= !mods
+        ; matts= atts }
       , pos )
   | TKeyword KVar ->
       let name, _ = expect_ident tks in

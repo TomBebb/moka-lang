@@ -4,9 +4,11 @@ open Type
 open Typer
 open Ast
 
-type error_kind = UnresolvedLHS
+type error_kind =
+  | UnresolvedLHS
 
-let error_msg = function UnresolvedLHS -> "unresolved RHS"
+let error_msg = function
+  | UnresolvedLHS -> "unresolved LHS"
 
 exception Error of error_kind span
 
@@ -22,7 +24,7 @@ type gen_ctx =
   ; mutable gen_func: llvalue
   ; gen_builder: llbuilder
   ; gen_vars: (string, llvalue) Hashtbl.t Stack.t
-  ; mutable gen_this: llvalue
+  ; mutable gen_this: llvalue option
   ; mutable gen_this_ty: lltype
   ; mutable gen_local_path: path option
   ; gen_typedefs: (path, gen_def_meta) Hashtbl.t }
@@ -35,14 +37,14 @@ let init () =
   let sig_ty = function_type (i32_type ctx) (Array.of_list []) in
   let main_func = declare_function "main" sig_ty main_mod in
   let entry = append_block ctx "entry" main_func in
-  position_at_end entry builder;
+  position_at_end entry builder ;
   { gen_ctx= ctx
   ; gen_mod= main_mod
   ; gen_main= main_func
   ; gen_func= main_func
   ; gen_vars= Stack.create ()
-  ; gen_this= Llvm.const_int (Llvm.i1_type ctx) 0
-  ; gen_this_ty = void_type ctx
+  ; gen_this= None
+  ; gen_this_ty= void_type ctx
   ; gen_builder= builder
   ; gen_local_path= None
   ; gen_typedefs= Hashtbl.create 10 }
@@ -60,19 +62,23 @@ let member_name _ path field =
 
 let find_var ctx name should_load =
   let res = ref None in
+  let maybe_load v = if should_load then build_load v name ctx.gen_builder else v in
   Stack.iter
     (fun tbl ->
       match Hashtbl.find_opt tbl name with
       | Some v ->
           res :=
-            Some (if should_load then build_load v name ctx.gen_builder else v)
+            Some (maybe_load v)
       | None -> () )
     ctx.gen_vars ;
   let local_path = get "no local path" ctx.gen_local_path in
   let local_meta = Hashtbl.find ctx.gen_typedefs local_path in
   ( match Hashtbl.find_opt local_meta.dstatics name with
-  | Some s -> res := Some s
+  | Some s -> res := Some (maybe_load s)
   | None -> () ) ;
+  (match Hashtbl.find_opt local_meta.dfield_indicies name with
+    | None -> ()
+  | Some ind -> res := Some(maybe_load (build_struct_gep (get "no this" ctx.gen_this) ind name ctx.gen_builder)));
   !res
 
 let set_var ctx name value = Hashtbl.add (Stack.top ctx.gen_vars) name value
@@ -202,21 +208,19 @@ let pre_gen_typedef ctx (meta, _) =
       match field.tmkind with
       | TMVar (ty, _) when not is_static ->
           let llty = gen_ty ctx ty in
-            Hashtbl.add indices field.tmname (List.length !types) ;
-            push llty
-      | _ -> ()
-    )
+          Hashtbl.add indices field.tmname (List.length !types) ;
+          push llty
+      | _ -> () )
     meta.temembers ;
-  (match meta.tekind with
+  ( match meta.tekind with
   | EClass _ | EStruct ->
       let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
       struct_set_body gen (Array.of_list !types) false ;
       let dmeta =
         {dstruct= gen; dfield_indicies= indices; dstatics= statics}
       in
-      ctx.gen_this_ty <- gen;
-      Hashtbl.add ctx.gen_typedefs meta.tepath dmeta);
-
+      ctx.gen_this_ty <- gen ;
+      Hashtbl.add ctx.gen_typedefs meta.tepath dmeta ) ;
   List.iter
     (fun (field, _) ->
       let is_static = MemberMods.mem MStatic field.tmmods in
@@ -245,17 +249,18 @@ let pre_gen_typedef ctx (meta, _) =
           Hashtbl.add statics field.tmname func
       | TMConstr (params, _) ->
           let params = List.map (fun param -> gen_ty ctx param.ptype) params in
-          let sig_ty = Llvm.function_type ctx.gen_this_ty (Array.of_list params) in
+          let sig_ty =
+            Llvm.function_type ctx.gen_this_ty (Array.of_list params)
+          in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
-          Hashtbl.add statics field.tmname func
-        )
+          Hashtbl.add statics field.tmname func )
     meta.temembers
 
 let gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
   ctx.gen_local_path <- Some meta.tepath ;
   let meta_meta = Hashtbl.find ctx.gen_typedefs meta.tepath in
-  ctx.gen_this_ty <- meta_meta.dstruct;
+  ctx.gen_this_ty <- meta_meta.dstruct ;
   List.iter
     (fun (field, _) ->
       let is_static = MemberMods.mem MStatic field.tmmods in
@@ -299,14 +304,17 @@ let gen_typedef ctx (meta, _) =
             () ) ;
           ignore (leave_block ctx)
       | TMConstr (args, body) ->
-        let func = get "constructor not found" (lookup_function name ctx.gen_mod) in
-        let entry = append_block ctx.gen_ctx "entry" func in
-        ctx.gen_func <- func;
-        position_at_end entry ctx.gen_builder;
-
+          let func =
+            get "constructor not found" (lookup_function name ctx.gen_mod)
+          in
+          let entry = append_block ctx.gen_ctx "entry" func in
+          ctx.gen_func <- func ;
+          position_at_end entry ctx.gen_builder ;
           enter_block ctx ;
-          let this_ptr = build_alloca ctx.gen_this_ty "this_ptr" ctx.gen_builder in
-          ctx.gen_this <- this_ptr;
+          let this_ptr =
+            build_alloca ctx.gen_this_ty "this_ptr" ctx.gen_builder
+          in
+          ctx.gen_this <- Some this_ptr ;
           List.iteri
             (fun index par ->
               let param = Llvm.param func index in
@@ -316,8 +324,8 @@ let gen_typedef ctx (meta, _) =
               let _ = build_store param ptr ctx.gen_builder in
               set_var ctx par.pname ptr )
             args ;
-          ignore (gen_expr ctx body);
-          ignore (leave_block ctx);
+          ignore (gen_expr ctx body) ;
+          ignore (leave_block ctx) ;
           let this_val = build_load this_ptr "this" ctx.gen_builder in
           ignore (build_ret this_val ctx.gen_builder)
       | _ -> () )

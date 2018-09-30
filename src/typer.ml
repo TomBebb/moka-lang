@@ -185,9 +185,11 @@ let rec type_expr ctx ex =
         raise (Error (Expected (TPrim TBool), pos)) ;
       mk (TEWhile (cond, body)) (TPrim TVoid)
   | ENew (path, args) ->
-      let _ = match Hashtbl.find_opt ctx.ttypedefs path with
-      | Some d -> d
-      | None -> raise (Error (UnresolvedPath path, pos)) in
+      let _ =
+        match Hashtbl.find_opt ctx.ttypedefs path with
+        | Some d -> d
+        | None -> raise (Error (UnresolvedPath path, pos))
+      in
       let args = List.map (type_expr ctx) args in
       mk (TENew (path, args)) (TPath path)
 
@@ -295,4 +297,6 @@ let rec s_ty_expr tabs (meta, _) =
       Printf.sprintf "var %s = %s" name (s_ty_expr tabs ex)
   | TEVar (Some t, name, ex) ->
       Printf.sprintf "var %s: %s = %s" name (s_ty t) (s_ty_expr tabs ex)
-  | TENew (path, args) -> Printf.sprintf "new %s(%s)" (s_path path) (String.concat "," (List.map (s_ty_expr tabs) args))
+  | TENew (path, args) ->
+      Printf.sprintf "new %s(%s)" (s_path path)
+        (String.concat "," (List.map (s_ty_expr tabs) args))

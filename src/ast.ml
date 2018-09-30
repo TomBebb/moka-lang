@@ -118,4 +118,6 @@ let rec s_expr tabs (def, _) =
   | EVar (None, name, ex) -> Printf.sprintf "var %s = %s" name (s_expr tabs ex)
   | EVar (Some t, name, ex) ->
       Printf.sprintf "var %s: %s = %s" name (s_ty t) (s_expr tabs ex)
-  | ENew (path, args) -> Printf.sprintf "new %s(%s)" (s_path path) (String.concat "," (List.map (s_expr tabs) args))
+  | ENew (path, args) ->
+      Printf.sprintf "new %s(%s)" (s_path path)
+        (String.concat "," (List.map (s_expr tabs) args))

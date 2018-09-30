@@ -4,10 +4,11 @@ class Main {
 	var x: float
 	var y: float
 	func new() {
-
+		x = 1.0
+		y = 2.0
 	}
 	static func main(): int {
 		var main = new Main()
-		0
+		2
 	}
 }
