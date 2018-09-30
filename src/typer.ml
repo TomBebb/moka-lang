@@ -3,6 +3,7 @@ open Type
 open Printf
 
 type ty_expr_def =
+  | TEThis
   | TEConst of const
   | TEIdent of string
   | TEField of ty_expr * string
@@ -49,12 +50,14 @@ type error_kind =
   | UnresolvedField of ty * string
   | CannotField of ty
   | UnresolvedFieldType of string
+  | UnresolvedThis
   | Expected of ty
   | CannotCall of ty
 
 let error_msg = function
   | UnresolvedIdent s -> sprintf "Failed to resolve identifier '%s'" s
   | UnresolvedPath p -> sprintf "Unresolved path '%s'" (s_path p)
+  | UnresolvedThis -> "Unresolved this"
   | CannotBinOp (op, a, b) ->
       sprintf "Operation '%s' cannot be performed on types %s an %s"
         (s_binop op) (s_ty a) (s_ty b)
@@ -111,6 +114,7 @@ let rec type_expr ctx ex =
   in
   match edef with
   | EConst c -> mk (TEConst c) (TPrim (type_of_const c))
+  | EThis -> mk TEThis (match ctx.tthis with |Some t -> TPath t | None -> raise (Error (UnresolvedThis, pos)))
   | EIdent id -> (
       let v = find_var ctx id in
       match v with
@@ -274,6 +278,7 @@ let type_type_def ctx (def, pos) =
 
 let rec s_ty_expr tabs (meta, _) =
   match meta.edef with
+  | TEThis -> "this"
   | TEConst c -> s_const c
   | TEIdent id -> id
   | TEField (o, f) -> s_ty_expr tabs o ^ "." ^ f

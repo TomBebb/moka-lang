@@ -57,11 +57,14 @@ let parse_path tks =
   (Array.to_list parts, name)
 
 let parse_ty tks =
-  let tk = Stream.next tks in
-  let def, pos = tk in
-  match def with
-  | TKPrim p -> TPrim p
-  | _ -> raise (Error (mk_one (Unexpected (def, "type")) pos))
+  match Stream.peek tks with
+  | Some (TIdent _, _) ->
+    TPath (parse_path tks)
+  | Some (TKPrim p, _) ->
+    ignore (Stream.next tks);
+    TPrim p
+  | Some(def, pos) -> raise (Error (mk_one (Unexpected (def, "type")) pos))
+  | None -> raise (Failure "unexpected eof parsing type")
 
 let rec parse_expr tks =
   let rec parse_exprs tks term sep =
@@ -81,6 +84,8 @@ let rec parse_expr tks =
     match first with
     | TIdent id -> mk_one (EIdent id) first_pos
     | TConst c -> mk_one (EConst c) first_pos
+    | TKeyword KThis ->
+        mk_one EThis first_pos
     | TKeyword KNew ->
         let path = parse_path tks in
         ignore (expect tks [TOpenParen] "constructor call") ;

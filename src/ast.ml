@@ -20,6 +20,7 @@ type 'a span = 'a * pos
 let span_v (v, _) = v
 
 type expr_def =
+  | EThis
   | EConst of const
   | EIdent of string
   | EField of expr * string
@@ -32,6 +33,7 @@ type expr_def =
   | EWhile of expr * expr
   | EVar of ty option * string * expr
   | ENew of path * expr list
+
 
 and expr = expr_def span
 
@@ -96,6 +98,7 @@ let s_unop = function OpNeg -> "-" | OpNot -> "!"
 
 let rec s_expr tabs (def, _) =
   match def with
+  | EThis -> "this"
   | EConst c -> s_const c
   | EIdent id -> id
   | EField (o, f) -> s_expr tabs o ^ "." ^ f

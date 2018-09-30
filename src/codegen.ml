@@ -14,7 +14,8 @@ exception Error of error_kind span
 type gen_def_meta =
   { dstruct: lltype
   ; dfield_indicies: (string, int) Hashtbl.t
-  ; dstatics: (string, llvalue) Hashtbl.t }
+  ; dstatics: (string, llvalue) Hashtbl.t
+  ; dmethods: (string, llvalue) Hashtbl.t }
 
 type gen_ctx =
   { gen_ctx: llcontext
@@ -115,22 +116,34 @@ let gen_const ctx = function
   | CBool b -> Llvm.const_int (gen_ty ctx (TPrim TBool)) (if b then 1 else 0)
   | CNull -> Llvm.const_null (void_type ctx.gen_ctx)
 
-let gen_expr_lhs ctx (def, pos) =
-  match def.edef with
-  | TEIdent id -> (
-    match find_var ctx id false with
-    | Some v -> v
-    | None -> raise (Error (UnresolvedLHS, pos)) )
-  | _ -> raise (Error (UnresolvedLHS, pos))
-
 let rec gen_expr ctx (def, pos) =
+  let gen_expr_lhs ctx (def, pos) =
+    match def.edef with
+    | TEIdent id -> (
+      match find_var ctx id false with
+      | Some v -> v
+      | None -> raise (Error (UnresolvedLHS, pos)) )
+  | TEField (obj, f) ->
+    let path = match ty_of obj with
+    | TPath p -> p
+    | _ -> raise (Failure "only path can be indexed") in
+    let obj = gen_expr ctx obj in
+    let def = Hashtbl.find ctx.gen_typedefs path in
+    let index = Hashtbl.find def.dfield_indicies f in
+    build_struct_gep obj index f ctx.gen_builder
+  | _ -> raise (Error (UnresolvedLHS, pos))
+in
   match def.edef with
   | TEConst c -> gen_const ctx c
+  | TEThis -> get "unresolved this" ctx.gen_this
   | TEIdent id -> (
       let v = find_var ctx id true in
       match v with
       | Some v -> v
       | None -> raise (Typer.Error (UnresolvedIdent id, pos)) )
+  | TEField (_, f) ->
+    let ptr = gen_expr_lhs ctx (def, pos) in
+    build_load ptr f ctx.gen_builder
   | TEVar (_, name, v) ->
       let v = gen_expr ctx v in
       let ptr = Llvm.build_alloca (type_of v) name ctx.gen_builder in
@@ -192,10 +205,22 @@ let rec gen_expr ctx (def, pos) =
       let _ = build_br after_bl ctx.gen_builder in
       Llvm.position_at_end after_bl ctx.gen_builder ;
       cond
-  | TECall (func, args) ->
-      let func = gen_expr ctx func in
-      let args = List.map (gen_expr ctx) args in
-      build_call func (Array.of_list args) "func_res" ctx.gen_builder
+  | TECall ((def, pos), args) ->
+      let args = ref (List.map (gen_expr ctx) args) in
+      let func = match def.edef with
+      | TEField (o, f) ->
+        let obj_t = ty_of o in
+        let path = match obj_t with
+        | TPath p -> p
+        | _ -> raise (Failure "no path") in
+
+        let meta = Hashtbl.find ctx.gen_typedefs path in
+        print_endline f;
+        let meth = Hashtbl.find meta.dmethods f in
+        args := [(get "this" ctx.gen_this)] @ !args;
+        meth
+      | _ -> gen_expr ctx (def, pos) in
+      build_call func (Array.of_list !args) "func_res" ctx.gen_builder
   | TENew (path, args) ->
       let meta = Hashtbl.find ctx.gen_typedefs path in
       let constr = Hashtbl.find meta.dstatics "new" in
@@ -210,6 +235,7 @@ let pre_gen_typedef ctx (meta, _) =
   let indices = Hashtbl.create 16 in
   let push ty = types := !types @ [ty] in
   let statics = Hashtbl.create 16 in
+  let methods = Hashtbl.create 10 in
   ctx.gen_local_path <- Some meta.tepath ;
   (* generate fields *)
   List.iter
@@ -227,7 +253,7 @@ let pre_gen_typedef ctx (meta, _) =
       let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
       struct_set_body gen (Array.of_list !types) false ;
       let dmeta =
-        {dstruct= gen; dfield_indicies= indices; dstatics= statics}
+        {dstruct= gen; dfield_indicies= indices; dstatics= statics; dmethods = methods}
       in
       ctx.gen_this_ty <- gen ;
       Hashtbl.add ctx.gen_typedefs meta.tepath dmeta ) ;
@@ -256,14 +282,16 @@ let pre_gen_typedef ctx (meta, _) =
             Llvm.function_type (gen_ty ctx ret) (Array.of_list !llpars)
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
-          Hashtbl.add statics field.tmname func
+
+          Hashtbl.add (if is_static then statics else methods) field.tmname func
       | TMConstr (params, _) ->
           let params = List.map (fun param -> gen_ty ctx param.ptype) params in
           let sig_ty =
             Llvm.function_type ctx.gen_this_ty (Array.of_list params)
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
-          Hashtbl.add statics field.tmname func )
+          Hashtbl.add statics field.tmname func ) meta.temembers;
+    Hashtbl.iter (fun name func -> print_endline (sprintf "%s: %s" name (string_of_lltype (type_of func)))) methods;
     meta.temembers
 
 let gen_typedef ctx (meta, _) =
