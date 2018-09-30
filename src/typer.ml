@@ -53,6 +53,7 @@ type error_kind =
   | UnresolvedField of ty * string
   | CannotField of ty
   | UnresolvedFieldType of string
+  | CannotAssign
   | UnresolvedThis
   | Expected of ty
   | CannotCall of ty
@@ -74,11 +75,13 @@ let error_msg = function
   | Expected t -> sprintf "Expected type %s" (s_ty t)
   | CannotCall t -> sprintf "The type %s cannot be called" (s_ty t)
   | InvalidLHS -> "Invalid left-hand side of assignment"
+  | CannotAssign ->
+      "Cannot assign to this value. Did you mean to put 'var' instead of 'val'?"
 
 exception Error of error_kind span
 
 type type_context =
-  { tvars: (string, ty) Hashtbl.t Stack.t
+  { tvars: (string, variability * ty) Hashtbl.t Stack.t
   ; ttypedefs: (path, Ast.type_def) Hashtbl.t
   ; mutable tthis: path option
   ; mutable tin_static: bool }
@@ -113,7 +116,7 @@ let ty_of tex =
   let meta, _ = tex in
   meta.ety
 
-let set_var ctx name ty = Hashtbl.add (Stack.top ctx.tvars) name ty
+let set_var ctx name ty v = Hashtbl.add (Stack.top ctx.tvars) name (ty, v)
 
 let rec as_pack ctx ex =
   let edef, _ = ex in
@@ -138,7 +141,12 @@ let rec type_expr ctx ex =
   in
   let type_expr_lhs ctx (edef, pos) =
     match edef with
-    | EIdent _ | EField _ -> type_expr ctx (edef, pos)
+    | EIdent id -> (
+      match find_var ctx id with
+      | Some (Variable, v) -> mk (TEIdent id) v
+      | Some (Constant, _) -> raise (Error (CannotAssign, pos))
+      | _ -> raise (Error (UnresolvedIdent id, pos)) )
+    | EField _ -> type_expr ctx (edef, pos)
     | _ -> raise (Error (InvalidLHS, pos))
   in
   match edef with
@@ -151,7 +159,7 @@ let rec type_expr ctx ex =
   | EIdent id -> (
       let v = find_var ctx id in
       match v with
-      | Some v -> mk (TEIdent id) v
+      | Some (_, v) -> mk (TEIdent id) v
       | None when Hashtbl.mem ctx.ttypedefs ([], id) ->
           let path =
             match as_path ctx ex with
@@ -162,6 +170,7 @@ let rec type_expr ctx ex =
       | None -> raise (Error (UnresolvedIdent id, pos)) )
   | EVar (vari, t, name, v) ->
       let v = type_expr ctx v in
+      set_var ctx name vari (ty_of v) ;
       mk (TEVar (vari, t, name, v)) (TPrim TVoid)
   | EParen inner ->
       let inner = type_expr ctx inner in
@@ -169,7 +178,8 @@ let rec type_expr ctx ex =
   | EField (o, f) ->
       let obj = type_expr ctx o in
       let member = resolve_field ctx (ty_of obj) f pos in
-      mk (TEField (obj, f)) (type_of_member ctx member)
+      let _, mem = type_of_member ctx member in
+      mk (TEField (obj, f)) mem
   | EUnOp (op, v) ->
       let v = type_expr ctx v in
       mk (TEUnOp (op, v)) (ty_of v)
@@ -245,16 +255,16 @@ let rec type_expr ctx ex =
 
 and type_of_member ctx (def, pos) =
   match def.mkind with
-  | MVar (_, Some ty, _) -> ty
-  | MVar (_, None, Some ex) -> ty_of (type_expr ctx ex)
+  | MVar (v, Some ty, _) -> (v, ty)
+  | MVar (v, None, Some ex) -> (v, ty_of (type_expr ctx ex))
   | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
   | MFunc (params, ret, _) ->
-      TFunc (List.map (fun par -> par.ptype) params, ret)
+      (Constant, TFunc (List.map (fun par -> par.ptype) params, ret))
   | MConstr (params, _) ->
-      TFunc (List.map (fun par -> par.ptype) params, TPrim TVoid)
+      (Constant, TFunc (List.map (fun par -> par.ptype) params, TPrim TVoid))
 
 and find_var ctx name =
-  let res = ref None in
+  let res : (variability * ty) option ref = ref None in
   Stack.iter
     (fun tbl ->
       if !res != None then ()
@@ -294,22 +304,23 @@ let type_member ctx (def, pos) =
         raise (Error (UnresolvedFieldType def.mname, pos))
     | MFunc (params, ret, body) ->
         let _ = enter_block ctx in
-        List.iter (fun par -> set_var ctx par.pname par.ptype) params ;
+        List.iter (fun par -> set_var ctx par.pname Constant par.ptype) params ;
         let body = type_expr ctx body in
         let _ = leave_block ctx in
         TMFunc (params, ret, body)
     | MConstr (params, body) ->
         let _ = enter_block ctx in
-        List.iter (fun par -> set_var ctx par.pname par.ptype) params ;
+        List.iter (fun par -> set_var ctx par.pname Constant par.ptype) params ;
         let body = type_expr ctx body in
         let _ = leave_block ctx in
         TMConstr (params, body)
   in
+  let _, tmty = type_of_member ctx (def, pos) in
   ( { tmkind= kind
     ; tmname= def.mname
     ; tmmods= def.mmods
     ; tmatts= def.matts
-    ; tmty= type_of_member ctx (def, pos) }
+    ; tmty }
   , pos )
 
 let type_type_def ctx (def, pos) =
