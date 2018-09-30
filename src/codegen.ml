@@ -297,6 +297,7 @@ let pre_gen_typedef ctx (meta, _) =
   List.iter
     (fun (field, _) ->
       let is_static = MemberMods.mem MStatic field.tmmods in
+      let is_extern = MemberMods.mem MExtern field.tmmods in
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
       | TMVar (Constant, _, Some v) when is_static ->
@@ -318,13 +319,21 @@ let pre_gen_typedef ctx (meta, _) =
               else [gen_ty ctx (TPath (get "no path found" ctx.gen_local_path))]
               )
           in
+          let callconv, is_var =
+            match (is_extern, Hashtbl.find_opt field.tmatts "CallConv") with
+            | _, Some (CString "vararg") -> (CallConv.c, true)
+            | _, Some (CString "cold") -> (CallConv.cold, false)
+            | true, _ -> (CallConv.c, false)
+            | _ -> (CallConv.fast, false)
+          in
           let params = List.map (fun param -> gen_ty ctx param.ptype) params in
           List.iter (fun param -> llpars := !llpars @ [param]) params ;
           let sig_ty =
-            Llvm.function_type (gen_ty ctx ret) (Array.of_list !llpars)
+            (if is_var then var_arg_function_type else function_type)
+              (gen_ty ctx ret) (Array.of_list !llpars)
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
-          set_function_call_conv CallConv.fast func ;
+          if not is_extern then set_function_call_conv callconv func ;
           Hashtbl.add
             (if is_static then statics else methods)
             field.tmname func
