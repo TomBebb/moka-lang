@@ -1,4 +1,5 @@
 open Type
+open Printf
 
 type const =
   | CInt of int
@@ -19,6 +20,10 @@ type 'a span = 'a * pos
 
 let span_v (v, _) = v
 
+type variability =
+  | Variable
+  | Constant
+
 type expr_def =
   | EThis
   | EConst of const
@@ -31,7 +36,7 @@ type expr_def =
   | EParen of expr
   | EIf of expr * expr * expr option
   | EWhile of expr * expr
-  | EVar of ty option * string * expr
+  | EVar of variability * ty option * string * expr
   | ENew of path * expr list
 
 and expr = expr_def span
@@ -39,7 +44,7 @@ and expr = expr_def span
 type param = {pname: string; ptype: ty}
 
 type member_kind =
-  | MVar of ty option * expr option
+  | MVar of variability * ty option * expr option
   | MFunc of param list * ty * expr
   | MConstr of param list * expr
 
@@ -95,6 +100,11 @@ let s_binop = function
 
 let s_unop = function OpNeg -> "-" | OpNot -> "!"
 
+
+let s_variability = function
+  | Variable -> "var"
+  | Constant -> "val"
+
 let rec s_expr tabs (def, _) =
   match def with
   | EThis -> "this"
@@ -117,9 +127,9 @@ let rec s_expr tabs (def, _) =
       "if " ^ s_expr tabs cond ^ " " ^ s_expr tabs if_e ^ " else "
       ^ s_expr tabs else_e
   | EWhile (cond, body) -> "while " ^ s_expr tabs cond ^ " " ^ s_expr tabs body
-  | EVar (None, name, ex) -> Printf.sprintf "var %s = %s" name (s_expr tabs ex)
-  | EVar (Some t, name, ex) ->
-      Printf.sprintf "var %s: %s = %s" name (s_ty t) (s_expr tabs ex)
+  | EVar (v, None, name, ex) -> sprintf "%s %s = %s" (s_variability v) name (s_expr tabs ex)
+  | EVar (v, Some t, name, ex) ->
+      sprintf "%s %s: %s = %s" (s_variability v) name (s_ty t) (s_expr tabs ex)
   | ENew (path, args) ->
-      Printf.sprintf "new %s(%s)" (s_path path)
+      sprintf "new %s(%s)" (s_path path)
         (String.concat "," (List.map (s_expr tabs) args))

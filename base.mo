@@ -1,4 +1,5 @@
 class Main {
+	static val PI: float = 3.14
 	@LinkName("llvm.sqrt.f32")
 	static extern func sqrt(v: float): float
 	var x: float
@@ -14,5 +15,5 @@ class Main {
 		var main = new Main()
 		2
 	}
-	
+
 }

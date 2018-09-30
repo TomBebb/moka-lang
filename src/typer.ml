@@ -14,7 +14,7 @@ type ty_expr_def =
   | TEParen of ty_expr
   | TEIf of ty_expr * ty_expr * ty_expr option
   | TEWhile of ty_expr * ty_expr
-  | TEVar of ty option * string * ty_expr
+  | TEVar of variability * ty option * string * ty_expr
   | TENew of path * ty_expr list
 
 and ty_expr_meta = {edef: ty_expr_def; ety: ty}
@@ -22,7 +22,7 @@ and ty_expr_meta = {edef: ty_expr_def; ety: ty}
 and ty_expr = ty_expr_meta span
 
 type ty_member_kind =
-  | TMVar of ty * ty_expr option
+  | TMVar of variability * ty * ty_expr option
   | TMFunc of param list * ty * ty_expr
   | TMConstr of param list * ty_expr
 
@@ -124,9 +124,9 @@ let rec type_expr ctx ex =
       match v with
       | Some v -> mk (TEIdent id) v
       | None -> raise (Error (UnresolvedIdent id, pos)) )
-  | EVar (t, name, v) ->
+  | EVar (vari, t, name, v) ->
       let v = type_expr ctx v in
-      mk (TEVar (t, name, v)) (TPrim TVoid)
+      mk (TEVar (vari, t, name, v)) (TPrim TVoid)
   | EParen inner ->
       let inner = type_expr ctx inner in
       mk (TEParen inner) (ty_of inner)
@@ -205,8 +205,8 @@ let rec type_expr ctx ex =
 
 and type_of_member ctx (def, pos) =
   match def.mkind with
-  | MVar (Some ty, _) -> ty
-  | MVar (None, Some ex) -> ty_of (type_expr ctx ex)
+  | MVar (_, Some ty, _) -> ty
+  | MVar (_, None, Some ex) -> ty_of (type_expr ctx ex)
   | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
   | MFunc (params, ret, _) ->
       TFunc (List.map (fun par -> par.ptype) params, ret)
@@ -246,11 +246,11 @@ let type_member ctx (def, pos) =
   ctx.tin_static <- MemberMods.mem MStatic def.mmods ;
   let kind =
     match def.mkind with
-    | MVar (Some ty, None) -> TMVar (ty, None)
-    | MVar (_, Some ex) ->
+    | MVar (v, Some ty, None) -> TMVar (v, ty, None)
+    | MVar (v, _, Some ex) ->
         let ex = type_expr ctx ex in
-        TMVar (ty_of ex, Some ex)
-    | MVar (None, None) -> raise (Error (UnresolvedFieldType def.mname, pos))
+        TMVar (v, ty_of ex, Some ex)
+    | MVar (_, None, None) -> raise (Error (UnresolvedFieldType def.mname, pos))
     | MFunc (params, ret, body) ->
         let _ = enter_block ctx in
         List.iter (fun par -> set_var ctx par.pname par.ptype) params ;
@@ -304,10 +304,10 @@ let rec s_ty_expr tabs (meta, _) =
       ^ s_ty_expr tabs else_e
   | TEWhile (cond, body) ->
       "while " ^ s_ty_expr tabs cond ^ " " ^ s_ty_expr tabs body
-  | TEVar (None, name, ex) ->
-      Printf.sprintf "var %s = %s" name (s_ty_expr tabs ex)
-  | TEVar (Some t, name, ex) ->
-      Printf.sprintf "var %s: %s = %s" name (s_ty t) (s_ty_expr tabs ex)
+  | TEVar (v, None, name, ex) ->
+      Printf.sprintf "%s %s = %s" (s_variability v) name (s_ty_expr tabs ex)
+  | TEVar (v, Some t, name, ex) ->
+      Printf.sprintf "%s %s: %s = %s" (s_variability v) name (s_ty t) (s_ty_expr tabs ex)
   | TENew (path, args) ->
       Printf.sprintf "new %s(%s)" (s_path path)
         (String.concat "," (List.map (s_ty_expr tabs) args))

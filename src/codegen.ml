@@ -38,7 +38,7 @@ let init () =
   let size_t_size = Ctypes.sizeof Ctypes.size_t in
   let size_t = integer_type ctx (size_t_size * 8) in
   let malloc_sig =
-    function_type (pointer_type (void_type ctx)) (Array.of_list [size_t])
+    function_type (pointer_type (i8_type ctx)) (Array.of_list [size_t])
   in
   ignore (declare_function "GC_malloc" malloc_sig main_mod) ;
   let sig_ty = function_type (i32_type ctx) (Array.of_list []) in
@@ -155,7 +155,7 @@ let rec gen_expr ctx (def, pos) =
   | TEField (_, f) ->
       let ptr = gen_expr_lhs ctx (def, pos) in
       build_load ptr f ctx.gen_builder
-  | TEVar (_, name, v) ->
+  | TEVar (_, _, name, v) ->
       let v = gen_expr ctx v in
       let ptr = Llvm.build_alloca (type_of v) name ctx.gen_builder in
       let _ = Llvm.build_store v ptr ctx.gen_builder in
@@ -232,7 +232,11 @@ let rec gen_expr ctx (def, pos) =
             meth
         | _ -> gen_expr ctx (def, pos)
       in
-      build_call func (Array.of_list !args) "func_res" ctx.gen_builder
+      let res = build_call func (Array.of_list !args) "func_res" ctx.gen_builder in
+      if ty_of (def, pos) = TPrim TVoid then
+        gen_const ctx CNull
+      else
+        res
   | TENew (path, args) ->
       let meta = Hashtbl.find ctx.gen_typedefs path in
       let constr = Hashtbl.find meta.dstatics "new" in
@@ -254,7 +258,7 @@ let pre_gen_typedef ctx (meta, _) =
     (fun (field, _) ->
       let is_static = MemberMods.mem MStatic field.tmmods in
       match field.tmkind with
-      | TMVar (ty, _) when not is_static ->
+      | TMVar (_, ty, _) when not is_static ->
           let llty = gen_ty ctx ty in
           Hashtbl.add indices field.tmname (List.length !types) ;
           push llty
@@ -277,11 +281,16 @@ let pre_gen_typedef ctx (meta, _) =
       let is_static = MemberMods.mem MStatic field.tmmods in
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
-      | TMVar (ty, _) when is_static ->
+      | TMVar (Constant, _, Some v) when is_static ->
+          let v = gen_expr ctx v in
+          let global = Llvm.define_global name v ctx.gen_mod in
+          set_unnamed_addr true global;
+          Hashtbl.add statics field.tmname global
+      | TMVar (_, ty, None) when is_static ->
           let llty = gen_ty ctx ty in
           let global = Llvm.declare_global llty name ctx.gen_mod in
           Hashtbl.add statics field.tmname global
-      | TMVar (_, _) -> ()
+      | TMVar (_, _, _) -> ()
       | TMFunc ([], TPrim TInt, _) when is_static && field.tmname = "main" ->
           ()
       | TMFunc (params, ret, _) ->
@@ -322,14 +331,16 @@ let gen_typedef ctx (meta, _) =
   ctx.gen_this_ty <- meta_meta.dstruct ;
   List.iter
     (fun (field, _) ->
-      let is_static = MemberMods.mem MStatic field.tmmods in
+      let is_static = MemberMods.mem MStatic field.tmmods in  
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
-      | TMVar (_, Some va) when is_static ->
+      | TMVar (Variable, _, Some va) when is_static ->
           let global =
             get "global not found" (lookup_global name ctx.gen_mod)
           in
-          set_initializer global (gen_expr ctx va)
+          set_global_constant true global;
+          set_externally_initialized false global; 
+          set_initializer global (gen_expr ctx va);
       | TMFunc (args, ret, ex) when not (MemberMods.mem MExtern field.tmmods)
         ->
           let is_main = is_static && field.tmname = "main" && args = [] in
@@ -413,16 +424,17 @@ let gen_typedef ctx (meta, _) =
     meta.temembers
 
 let optimize ctx =
+  print_endline "Optimizing";
   let pmb = Llvm_passmgr_builder.create () in
-  Llvm_passmgr_builder.set_opt_level 4 pmb;
-  Llvm_passmgr_builder.use_inliner_with_threshold 3 pmb;
+  Llvm_passmgr_builder.set_opt_level 4 pmb ;
+  Llvm_passmgr_builder.use_inliner_with_threshold 3 pmb ;
   let pm = PassManager.create () in
-  Llvm_passmgr_builder.populate_module_pass_manager pm pmb;
-  assert(PassManager.run_module ctx.gen_mod pm)
+  Llvm_passmgr_builder.populate_module_pass_manager pm pmb ;
+  assert (PassManager.run_module ctx.gen_mod pm)
 
 let build ctx output_file =
-  optimize ctx;
-  dump_module ctx.gen_mod;
+  optimize ctx ;
+  dump_module ctx.gen_mod ;
   let triple = Target.default_triple () in
   let target = Target.by_triple triple in
   let target_mach = TargetMachine.create ~triple target in
