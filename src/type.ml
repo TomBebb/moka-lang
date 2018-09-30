@@ -9,6 +9,7 @@ type primitive_ty =
   | TLong
   | TFloat
   | TDouble
+  | TString
 
 type ty = TPrim of primitive_ty | TPath of path | TFunc of ty list * ty
 
@@ -21,6 +22,7 @@ let s_primitive_ty = function
   | TLong -> "long"
   | TFloat -> "float"
   | TDouble -> "double"
+  | TString -> "String"
 
 let s_path (parts, name) = String.concat "." (parts @ [name])
 

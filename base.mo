@@ -14,4 +14,5 @@ class Main {
 		var main = new Main()
 		2
 	}
+	
 }

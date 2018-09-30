@@ -8,6 +8,7 @@
    llvm.target
    llvm.scalar_opts
    llvm.all_backends
+   llvm.passmgr_builder
    stdio
    sedlex
  )

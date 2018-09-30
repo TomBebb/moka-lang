@@ -27,20 +27,20 @@ type gen_ctx =
   ; mutable gen_this: llvalue option
   ; mutable gen_this_ty: lltype
   ; mutable gen_local_path: path option
-  ; gen_typedefs: (path, gen_def_meta) Hashtbl.t;
-  gen_size_t: lltype }
+  ; gen_typedefs: (path, gen_def_meta) Hashtbl.t
+  ; gen_size_t: lltype }
 
 let init () =
   Llvm_all_backends.initialize () ;
   let ctx = create_context () in
   let main_mod = create_module ctx "main" in
   let builder = builder ctx in
-
   let size_t_size = Ctypes.sizeof Ctypes.size_t in
   let size_t = integer_type ctx (size_t_size * 8) in
-  let malloc_sig = function_type (pointer_type (void_type ctx)) (Array.of_list [size_t]) in
-  ignore (declare_function "GC_malloc" malloc_sig main_mod);
-
+  let malloc_sig =
+    function_type (pointer_type (void_type ctx)) (Array.of_list [size_t])
+  in
+  ignore (declare_function "GC_malloc" malloc_sig main_mod) ;
   let sig_ty = function_type (i32_type ctx) (Array.of_list []) in
   let main_func = declare_function "main" sig_ty main_mod in
   let entry = append_block ctx "entry" main_func in
@@ -54,8 +54,8 @@ let init () =
   ; gen_this_ty= void_type ctx
   ; gen_builder= builder
   ; gen_local_path= None
-  ; gen_typedefs= Hashtbl.create 10;
-  gen_size_t = size_t }
+  ; gen_typedefs= Hashtbl.create 10
+  ; gen_size_t= size_t }
 
 let enter_block ctx = Stack.push (Hashtbl.create 12) ctx.gen_vars
 
@@ -114,13 +114,14 @@ let rec gen_ty ctx ty =
   | TPrim TLong -> Llvm.i64_type ctx.gen_ctx
   | TPrim TFloat -> Llvm.float_type ctx.gen_ctx
   | TPrim TDouble -> Llvm.double_type ctx.gen_ctx
+  | TPrim TString -> Llvm.pointer_type (i8_type ctx.gen_ctx)
   | TPath path ->
       Llvm.pointer_type (Hashtbl.find ctx.gen_typedefs path).dstruct
 
 let gen_const ctx = function
   | CInt i -> Llvm.const_int (gen_ty ctx (TPrim TInt)) i
   | CFloat f -> Llvm.const_float (gen_ty ctx (TPrim TFloat)) f
-  | CString s -> Llvm.const_string ctx.gen_ctx s
+  | CString s -> Llvm.const_stringz ctx.gen_ctx s
   | CBool b -> Llvm.const_int (gen_ty ctx (TPrim TBool)) (if b then 1 else 0)
   | CNull -> Llvm.const_null (void_type ctx.gen_ctx)
 
@@ -316,7 +317,6 @@ let pre_gen_typedef ctx (meta, _) =
 
 let gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
-
   ctx.gen_local_path <- Some meta.tepath ;
   let meta_meta = Hashtbl.find ctx.gen_typedefs meta.tepath in
   ctx.gen_this_ty <- meta_meta.dstruct ;
@@ -376,13 +376,24 @@ let gen_typedef ctx (meta, _) =
           ctx.gen_func <- func ;
           position_at_end entry ctx.gen_builder ;
           enter_block ctx ;
-          let this_ptr = match meta.tekind with
-          | EStruct -> build_alloca ctx.gen_this_ty "this_ptr" ctx.gen_builder
-          | EClass _ ->
-            let malloc = get "no gc func found" (lookup_function "GC_malloc" ctx.gen_mod) in
-            let this_size = size_of ctx.gen_this_ty in
-            let ptr = build_call malloc (Array.of_list [this_size]) "this_ptr" ctx.gen_builder in
-            build_pointercast ptr (pointer_type ctx.gen_this_ty) "ptr" ctx.gen_builder         
+          let this_ptr =
+            match meta.tekind with
+            | EStruct ->
+                build_alloca ctx.gen_this_ty "this_ptr" ctx.gen_builder
+            | EClass _ ->
+                let malloc =
+                  get "no gc func found"
+                    (lookup_function "GC_malloc" ctx.gen_mod)
+                in
+                let this_size = size_of ctx.gen_this_ty in
+                let ptr =
+                  build_call malloc
+                    (Array.of_list [this_size])
+                    "this_ptr" ctx.gen_builder
+                in
+                build_pointercast ptr
+                  (pointer_type ctx.gen_this_ty)
+                  "ptr" ctx.gen_builder
           in
           ctx.gen_this <- Some this_ptr ;
           List.iteri
@@ -401,7 +412,17 @@ let gen_typedef ctx (meta, _) =
       | _ -> () )
     meta.temembers
 
+let optimize ctx =
+  let pmb = Llvm_passmgr_builder.create () in
+  Llvm_passmgr_builder.set_opt_level 4 pmb;
+  Llvm_passmgr_builder.use_inliner_with_threshold 3 pmb;
+  let pm = PassManager.create () in
+  Llvm_passmgr_builder.populate_module_pass_manager pm pmb;
+  assert(PassManager.run_module ctx.gen_mod pm)
+
 let build ctx output_file =
+  optimize ctx;
+  dump_module ctx.gen_mod;
   let triple = Target.default_triple () in
   let target = Target.by_triple triple in
   let target_mach = TargetMachine.create ~triple target in
