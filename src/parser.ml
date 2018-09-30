@@ -1,6 +1,7 @@
 open Ast
 open Token
 open Type
+open Printf
 
 type error_kind =
   | Unexpected of token * string
@@ -8,11 +9,15 @@ type error_kind =
 
 let error_msg = function
   | Unexpected (got, expected) ->
-      "Unexpected " ^ s_token_def got ^ " while parsing " ^ expected
+      sprintf "Unexpected '%s' while parsing %s" (s_token_def got) expected
+  | Expected ([expected], got, name) ->
+      sprintf "Expected '%s' but got '%s' while parsing %s"
+        (s_token_def expected) (s_token_def got) name
   | Expected (expected, got, name) ->
-      "Expected one of "
-      ^ String.concat "," (List.map s_token_def expected)
-      ^ " but got " ^ s_token_def got ^ "while parsing " ^ name
+      sprintf "Expected one of %s but got '%s' while parsing %s"
+        (String.concat ", "
+           (List.map (fun tk -> "'" ^ s_token_def tk ^ "'") expected))
+        (s_token_def got) name
 
 exception Error of error_kind span
 

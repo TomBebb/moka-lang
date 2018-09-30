@@ -1,5 +1,6 @@
 open Ast
 open Type
+open Printf
 
 type ty_expr_def =
   | TEConst of const
@@ -52,18 +53,19 @@ type error_kind =
   | CannotCall of ty
 
 let error_msg = function
-  | UnresolvedIdent s -> "Failed to resolve identifier '" ^ s ^ "'"
-  | UnresolvedPath p -> "Unresolved path '" ^ s_path p ^ "'"
+  | UnresolvedIdent s -> sprintf "Failed to resolve identifier '%s'" s
+  | UnresolvedPath p -> sprintf "Unresolved path '%s'" (s_path p)
   | CannotBinOp (op, a, b) ->
-      "Cannot peform operation '" ^ s_binop op ^ "' on types " ^ s_ty a
-      ^ " and " ^ s_ty b
+      sprintf "Operation '%s' cannot be performed on types %s an %s"
+        (s_binop op) (s_ty a) (s_ty b)
   | UnresolvedField (t, field) ->
-      "Unresolved field '" ^ field ^ "' on type " ^ s_ty t
-  | CannotField t -> "Type " ^ s_ty t ^ " has no fields"
+      sprintf "Type %s has no field '%s'" (s_ty t) field
+  | CannotField t ->
+      sprintf "Type %s is not a struct or class, so has no fields" (s_ty t)
   | UnresolvedFieldType name ->
-      "Type of field '" ^ name ^ "' could not be resolved"
-  | Expected t -> "Expected type " ^ s_ty t
-  | CannotCall t -> "The type " ^ s_ty t ^ " cannot be called"
+      sprintf "Type of field '%s' could not be resolved" name
+  | Expected t -> sprintf "Expected type %s" (s_ty t)
+  | CannotCall t -> sprintf "The type %s cannot be called" (s_ty t)
 
 exception Error of error_kind span
 

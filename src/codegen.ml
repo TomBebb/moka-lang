@@ -3,12 +3,11 @@ open Llvm_target
 open Type
 open Typer
 open Ast
+open Printf
 
-type error_kind =
-  | UnresolvedLHS
+type error_kind = UnresolvedLHS
 
-let error_msg = function
-  | UnresolvedLHS -> "unresolved LHS"
+let error_msg = function UnresolvedLHS -> "unresolved LHS"
 
 exception Error of error_kind span
 
@@ -62,23 +61,33 @@ let member_name _ path field =
 
 let find_var ctx name should_load =
   let res = ref None in
-  let maybe_load v = if should_load then build_load v name ctx.gen_builder else v in
+  let maybe_load v =
+    let is_func =
+      classify_type (type_of v) == TypeKind.Pointer
+      && classify_type (element_type (type_of v)) == TypeKind.Function
+    in
+    if should_load && not is_func then build_load v name ctx.gen_builder else v
+  in
   Stack.iter
     (fun tbl ->
       match Hashtbl.find_opt tbl name with
-      | Some v ->
-          res :=
-            Some (maybe_load v)
-      | None -> () )
+      | Some v when !res == None -> res := Some (maybe_load v)
+      | _ -> () )
     ctx.gen_vars ;
   let local_path = get "no local path" ctx.gen_local_path in
   let local_meta = Hashtbl.find ctx.gen_typedefs local_path in
   ( match Hashtbl.find_opt local_meta.dstatics name with
-  | Some s -> res := Some (maybe_load s)
-  | None -> () ) ;
-  (match Hashtbl.find_opt local_meta.dfield_indicies name with
-    | None -> ()
-  | Some ind -> res := Some(maybe_load (build_struct_gep (get "no this" ctx.gen_this) ind name ctx.gen_builder)));
+  | Some s when !res == None -> res := Some (maybe_load s)
+  | _ -> () ) ;
+  ( match Hashtbl.find_opt local_meta.dfield_indicies name with
+  | Some ind when !res == None ->
+      res :=
+        Some
+          (maybe_load
+             (build_struct_gep
+                (get "no this" ctx.gen_this)
+                ind name ctx.gen_builder))
+  | _ -> () ) ;
   !res
 
 let set_var ctx name value = Hashtbl.add (Stack.top ctx.gen_vars) name value
@@ -150,12 +159,12 @@ let rec gen_expr ctx (def, pos) =
       | OpMul, true -> Llvm.build_fmul
       | OpDiv, false -> Llvm.build_sdiv
       | OpDiv, true -> Llvm.build_fdiv
-      | _ -> raise (Typer.Error (UnresolvedIdent "aaaa", pos)) )
+      | _ -> raise (Failure ("op " ^ s_binop op ^ " unimplemented")) )
         a_val b_val "tmp_op" ctx.gen_builder
-  | TEBlock exprs ->
+  | TEBlock exprs -> (
       let last = ref None in
       List.iter (fun ex -> last := Some (gen_expr ctx ex)) exprs ;
-      gen_const ctx (CBool false)
+      match !last with Some v -> v | None -> gen_const ctx (CInt 0) )
   | TEIf (cond, if_e, Some else_e) ->
       let cond = gen_expr ctx cond in
       let then_bl = append_block ctx.gen_ctx "then" ctx.gen_func in
@@ -192,6 +201,7 @@ let rec gen_expr ctx (def, pos) =
       let constr = Hashtbl.find meta.dstatics "new" in
       let args = List.map (gen_expr ctx) args in
       build_call constr (Array.of_list args) "new" ctx.gen_builder
+  | TEParen inner -> gen_expr ctx inner
   | _ -> raise (Failure (s_ty_expr "" (def, pos)))
 
 let pre_gen_typedef ctx (meta, _) =
@@ -285,9 +295,15 @@ let gen_typedef ctx (meta, _) =
           ctx.gen_func <- func ;
           Llvm.position_at_end entry ctx.gen_builder ;
           enter_block ctx ;
+          let index_offset =
+            if is_static then 0
+            else (
+              ctx.gen_this <- Some (param func 0) ;
+              1 )
+          in
           List.iteri
             (fun index par ->
-              let param = Llvm.param func index in
+              let param = Llvm.param func (index_offset + index) in
               let ptr =
                 build_alloca (type_of param) par.pname ctx.gen_builder
               in
@@ -340,9 +356,7 @@ let build ctx output_file =
     raise (Failure "object file already exists!") ;
   TargetMachine.emit_to_file ctx.gen_mod CodeGenFileType.ObjectFile object_file
     target_mach ;
-  if
-    Sys.command (Printf.sprintf "gcc -o %s %s -lgc" output_file object_file)
-    == 1
+  if Sys.command (sprintf "gcc -o %s %s -lgc" output_file object_file) == 1
   then raise (Failure "failed to link") ;
   Sys.remove object_file
 

@@ -16,7 +16,8 @@ let () =
           (sprintf "%s: Parser error: %s" (s_pos pos) (Parser.error_msg kind))
     | Codegen.Error (kind, pos) ->
         Some
-          (sprintf "%s: Code generation error: %s" (s_pos pos) (Codegen.error_msg kind))
+          (sprintf "%s: Code generation error: %s" (s_pos pos)
+             (Codegen.error_msg kind))
     | _ -> None (* for other exceptions *) )
 
 let verbose = ref false
@@ -56,8 +57,9 @@ let _ =
           let ty_def = parse_type_def stream in
           print_endline "Typing" ;
           let typed = Typer.type_type_def typer ty_def in
-          print_endline "Generating" ;
+          print_endline "Pre Generating" ;
           let _ = Codegen.pre_gen_typedef gen typed in
+          print_endline "Generating" ;
           let _ = Codegen.gen_typedef gen typed in
           Llvm.dump_module gen.gen_mod ;
           Codegen.build gen !output )
