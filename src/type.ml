@@ -1,4 +1,6 @@
-type path = string list * string
+type pack = string list
+
+type path = pack * string
 
 type primitive_ty =
   | TVoid
@@ -11,7 +13,11 @@ type primitive_ty =
   | TDouble
   | TString
 
-type ty = TPrim of primitive_ty | TPath of path | TFunc of ty list * ty
+type ty =
+  | TPrim of primitive_ty
+  | TPath of path
+  | TFunc of ty list * ty
+  | TClass of path
 
 let s_primitive_ty = function
   | TVoid -> "void"
@@ -24,6 +30,8 @@ let s_primitive_ty = function
   | TDouble -> "double"
   | TString -> "String"
 
+let s_pack parts = String.concat "." parts
+
 let s_path (parts, name) = String.concat "." (parts @ [name])
 
 let rec s_ty = function
@@ -31,6 +39,7 @@ let rec s_ty = function
   | TPath p -> s_path p
   | TFunc (args, ret) ->
       "func " ^ String.concat ", " (List.map s_ty args) ^ s_ty ret
+  | TClass p -> Printf.sprintf "Class<%s>" (s_path p)
 
 let is_numeric = function
   | TPrim (TByte | TShort | TInt | TLong | TFloat | TDouble) -> true

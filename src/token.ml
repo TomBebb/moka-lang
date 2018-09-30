@@ -10,6 +10,7 @@ type keyword =
   | KExtends
   | KImplements
   | KImport
+  | KPackage
   (* type members *)
   | KVar
   | KVal
@@ -59,6 +60,7 @@ let s_keyword = function
   | KExtends -> "extends"
   | KImplements -> "implements"
   | KImport -> "import"
+  | KPackage -> "package"
   (* type members *)
   | KVar -> "var"
   | KVal -> "val"

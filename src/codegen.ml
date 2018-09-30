@@ -117,6 +117,7 @@ let rec gen_ty ctx ty =
   | TPrim TString -> Llvm.pointer_type (i8_type ctx.gen_ctx)
   | TPath path ->
       Llvm.pointer_type (Hashtbl.find ctx.gen_typedefs path).dstruct
+  | _ -> raise (Failure (sprintf "Cannot generate %s" (s_ty ty)))
 
 let gen_const ctx = function
   | CInt i -> Llvm.const_int (gen_ty ctx (TPrim TInt)) i
@@ -174,23 +175,25 @@ let rec gen_expr ctx (def, pos) =
       assert (Llvm.type_of a_val = gen_ty ctx (span_v a).ety) ;
       assert (Llvm.type_of b_val = gen_ty ctx (span_v b).ety) ;
       let ty = def.ety in
-      let (op, assign) = match inner_assign op with
-      | Some v -> (v, true)
-      | None -> (op, false)  in
-      let res = ( match (op, is_real ty) with
-      | OpAdd, false -> Llvm.build_add
-      | OpAdd, true -> Llvm.build_fadd
-      | OpSub, false -> Llvm.build_sub
-      | OpSub, true -> Llvm.build_fsub
-      | OpMul, false -> Llvm.build_mul
-      | OpMul, true -> Llvm.build_fmul
-      | OpDiv, false -> Llvm.build_sdiv
-      | OpDiv, true -> Llvm.build_fdiv
-      | _ -> raise (Failure ("op " ^ s_binop op ^ " unimplemented")) )
-        a_val b_val "tmp_op" ctx.gen_builder in
+      let op, assign =
+        match inner_assign op with Some v -> (v, true) | None -> (op, false)
+      in
+      let res =
+        ( match (op, is_real ty) with
+        | OpAdd, false -> Llvm.build_add
+        | OpAdd, true -> Llvm.build_fadd
+        | OpSub, false -> Llvm.build_sub
+        | OpSub, true -> Llvm.build_fsub
+        | OpMul, false -> Llvm.build_mul
+        | OpMul, true -> Llvm.build_fmul
+        | OpDiv, false -> Llvm.build_sdiv
+        | OpDiv, true -> Llvm.build_fdiv
+        | _ -> raise (Failure ("op " ^ s_binop op ^ " unimplemented")) )
+          a_val b_val "tmp_op" ctx.gen_builder
+      in
       if assign then
         ignore (build_store res (gen_expr_lhs ctx a) ctx.gen_builder) ;
-        res
+      res
   | TEBlock exprs -> (
       let last = ref None in
       List.iter (fun ex -> last := Some (gen_expr ctx ex)) exprs ;
@@ -226,16 +229,18 @@ let rec gen_expr ctx (def, pos) =
       let args = ref (List.map (gen_expr ctx) args) in
       let func =
         match def.edef with
-        | TEField (o, f) ->
+        | TEField (o, f) -> (
             let obj_t = ty_of o in
-            let path =
-              match obj_t with TPath p -> p | _ -> raise (Failure "no path")
-            in
-            let meta = Hashtbl.find ctx.gen_typedefs path in
-            print_endline f ;
-            let meth = Hashtbl.find meta.dmethods f in
-            args := [get "this" ctx.gen_this] @ !args ;
-            meth
+            match obj_t with
+            | TClass path ->
+                let meta = Hashtbl.find ctx.gen_typedefs path in
+                Hashtbl.find meta.dstatics f
+            | TPath path ->
+                let meta = Hashtbl.find ctx.gen_typedefs path in
+                let meth = Hashtbl.find meta.dmethods f in
+                args := [get "this" ctx.gen_this] @ !args ;
+                meth
+            | _ -> raise (Failure (sprintf "no path for %s" (s_ty obj_t))) )
         | _ -> gen_expr ctx (def, pos)
       in
       let res =
@@ -426,7 +431,13 @@ let gen_typedef ctx (meta, _) =
           let this_val = build_load this_ptr "this" ctx.gen_builder in
           ignore (build_ret this_val ctx.gen_builder)
       | _ -> () )
-    meta.temembers
+    meta.temembers ;
+  ()
+
+let pre_gen_mod ctx tm =
+  List.iter (fun def -> ignore (pre_gen_typedef ctx def)) tm.tmdefs
+
+let gen_mod ctx tm = List.iter (gen_typedef ctx) tm.tmdefs
 
 let optimize ctx =
   print_endline "Optimizing" ;

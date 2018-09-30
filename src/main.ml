@@ -54,13 +54,13 @@ let _ =
     try
       Some
         ( print_endline "Parsing" ;
-          let ty_def = parse_type_def stream in
+          let mod_def = parse_mod stream in
           print_endline "Typing" ;
-          let typed = Typer.type_type_def typer ty_def in
+          let typed = Typer.type_mod typer mod_def in
           print_endline "Pre Generating" ;
-          let _ = Codegen.pre_gen_typedef gen typed in
+          let _ = Codegen.pre_gen_mod gen typed in
           print_endline "Generating" ;
-          let _ = Codegen.gen_typedef gen typed in
+          let _ = Codegen.gen_mod gen typed in
           Llvm.dump_module gen.gen_mod ;
           Codegen.build gen !output )
     with e ->

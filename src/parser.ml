@@ -44,17 +44,28 @@ let expect tks expected name =
     raise (Error (mk (Expected (expected, def, name)) tk tk))
   else pos
 
-let parse_path tks =
+let rec last = function
+  | [item] -> item
+  | [] -> assert false
+  | _ :: rest -> last rest
+
+let parse_pack tks =
   let first, _ = expect_ident tks in
-  let parts = Array.of_list [first] in
+  let parts = ref [first] in
   while next_is tks TDot do
-    let _ = Stream.next tks in
+    ignore (Stream.next tks) ;
     let part, _ = expect_ident tks in
-    parts.(Array.length parts) <- part
+    parts := !parts @ [part]
   done ;
-  let name = parts.(Array.length parts - 1) in
-  let parts = Array.sub parts 0 (Array.length parts - 1) in
+  !parts
+
+let parse_path tks =
+  let parts = parse_pack tks in
+  let name = last parts in
+  let parts = Array.sub (Array.of_list parts) 0 (List.length parts - 1) in
   (Array.to_list parts, name)
+
+let local_pack = ref []
 
 let parse_ty tks =
   match Stream.peek tks with
@@ -271,7 +282,7 @@ let parse_type_def tks =
       let _ = expect tks [TOpenBrace] "struct declaration" in
       let members = parse_members tks TCloseBrace in
       let last = expect tks [TCloseBrace] "struct declaration" in
-      ( { epath= ([], name)
+      ( { epath= (!local_pack, name)
         ; emembers= members
         ; ekind= EStruct
         ; emods= ClassMods.empty }
@@ -285,9 +296,35 @@ let parse_type_def tks =
       let _ = expect tks [TOpenBrace] "class declaration" in
       let members = parse_members tks TCloseBrace in
       let last = expect tks [TCloseBrace] "class declaration" in
-      ( { epath= ([], name)
+      ( { epath= (!local_pack, name)
         ; emembers= members
         ; ekind= EClass cl
         ; emods= ClassMods.empty }
       , {pfile= start.pfile; pmin= start.pmin; pmax= last.pmax} )
   | _ -> raise (Error (mk_one (Unexpected (def, "type definition")) start))
+
+let parse_mod tks =
+  let rec parse_imports () =
+    match Stream.peek tks with
+    | Some (TKeyword KImport, _) ->
+        ignore (Stream.next tks) ;
+        let path = parse_path tks in
+        [path] @ parse_imports ()
+    | _ -> []
+  in
+  let rec parse_type_defs () =
+    if match Stream.peek tks with None | Some (TEof, _) -> true | _ -> false
+    then []
+    else
+      let def = parse_type_def tks in
+      [def] @ parse_type_defs ()
+  in
+  (local_pack :=
+     match Stream.peek tks with
+     | Some (TKeyword KPackage, _) ->
+         ignore (Stream.next tks) ;
+         parse_pack tks
+     | _ -> []) ;
+  let imports = parse_imports () in
+  let defs = parse_type_defs () in
+  {mpackage= !local_pack; mimports= imports; mdefs= defs}

@@ -73,6 +73,7 @@ let rec token buf =
   | "import" -> mk (TKeyword KImport)
   | "var" -> mk (TKeyword KVar)
   | "val" -> mk (TKeyword KVal)
+  | "package" -> mk (TKeyword KPackage)
   | "func" -> mk (TKeyword KFunc)
   | "new" -> mk (TKeyword KNew)
   | "static" -> mk (TKeyword KStatic)

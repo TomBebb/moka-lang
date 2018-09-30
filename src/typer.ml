@@ -41,7 +41,10 @@ type ty_type_def_meta =
   ; temods: ClassMods.t
   ; temembers: ty_member list }
 
-type ty_type_def = type_def_meta span
+type ty_type_def = ty_type_def_meta span
+
+type ty_module_def =
+  {tmimports: path list; tmdefs: ty_type_def list; tmpackage: pack}
 
 type error_kind =
   | UnresolvedIdent of string
@@ -92,7 +95,10 @@ let leave_block ctx = Stack.pop ctx.tvars
 
 let resolve_field ctx ty name pos =
   let path =
-    match ty with TPath p -> p | _ -> raise (Error (CannotField ty, pos))
+    match ty with
+    | TClass p -> p
+    | TPath p -> p
+    | _ -> raise (Error (CannotField ty, pos))
   in
   let field, _ =
     match Hashtbl.find_opt ctx.ttypedefs path with
@@ -109,8 +115,23 @@ let ty_of tex =
 
 let set_var ctx name ty = Hashtbl.add (Stack.top ctx.tvars) name ty
 
-let rec type_expr ctx ex =
+let rec as_pack ctx ex =
+  let edef, _ = ex in
+  match edef with
+  | EIdent id -> [id]
+  | EField (o, f) -> as_pack ctx o @ [f]
+  | _ -> []
 
+let as_path ctx ex =
+  let pack = as_pack ctx ex in
+  if pack = [] then None
+  else
+    let pack_arr = Array.of_list pack in
+    let name = pack_arr.(Array.length pack_arr - 1) in
+    let pack_arr = Array.sub pack_arr 0 (Array.length pack_arr - 1) in
+    Some (Array.to_list pack_arr, name)
+
+let rec type_expr ctx ex =
   let edef, pos = ex in
   let mk def ty =
     ({edef= def; ety= ty}, {pfile= pos.pfile; pmin= pos.pmin; pmax= pos.pmax})
@@ -118,7 +139,7 @@ let rec type_expr ctx ex =
   let type_expr_lhs ctx (edef, pos) =
     match edef with
     | EIdent _ | EField _ -> type_expr ctx (edef, pos)
-    | _ -> raise  (Error (InvalidLHS, pos))
+    | _ -> raise (Error (InvalidLHS, pos))
   in
   match edef with
   | EConst c -> mk (TEConst c) (TPrim (type_of_const c))
@@ -131,6 +152,13 @@ let rec type_expr ctx ex =
       let v = find_var ctx id in
       match v with
       | Some v -> mk (TEIdent id) v
+      | None when Hashtbl.mem ctx.ttypedefs ([], id) ->
+          let path =
+            match as_path ctx ex with
+            | Some v -> v
+            | None -> raise (Failure "")
+          in
+          mk (TEIdent id) (TClass path)
       | None -> raise (Error (UnresolvedIdent id, pos)) )
   | EVar (vari, t, name, v) ->
       let v = type_expr ctx v in
@@ -157,10 +185,10 @@ let rec type_expr ctx ex =
             else None
         | OpEq -> if a_ty = b_ty then Some (TPrim TBool) else None
         | _ when is_assign op ->
-          let lhs = type_expr_lhs ctx a_e in
-          assert(ty_of lhs = a_ty);
-          if a_ty = b_ty then Some a_ty else None
-        | _ -> assert(false)
+            let lhs = type_expr_lhs ctx a_e in
+            assert (ty_of lhs = a_ty) ;
+            if a_ty = b_ty then Some a_ty else None
+        | _ -> assert false
       in
       match res_ty with
       | None -> raise (Error (CannotBinOp (op, a_ty, b_ty), pos))
@@ -292,6 +320,13 @@ let type_type_def ctx (def, pos) =
     ; temods= def.emods
     ; temembers= List.map (type_member ctx) def.emembers }
   , pos )
+
+let type_mod ctx m =
+  List.iter
+    (fun (def, pos) -> Hashtbl.add ctx.ttypedefs def.epath (def, pos))
+    m.mdefs ;
+  let defs : ty_type_def list = List.map (type_type_def ctx) m.mdefs in
+  {tmimports= m.mimports; tmdefs= defs; tmpackage= m.mpackage}
 
 let rec s_ty_expr tabs (meta, _) =
   match meta.edef with

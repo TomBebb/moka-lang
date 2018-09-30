@@ -8,7 +8,17 @@ type const =
   | CBool of bool
   | CNull
 
-type binop = OpAdd | OpSub | OpMul | OpDiv | OpAssign | OpEq | OpAddAssign | OpSubAssign | OpMulAssign | OpDivAssign
+type binop =
+  | OpAdd
+  | OpSub
+  | OpMul
+  | OpDiv
+  | OpAssign
+  | OpEq
+  | OpAddAssign
+  | OpSubAssign
+  | OpMulAssign
+  | OpDivAssign
 
 type unop = OpNeg | OpNot
 
@@ -78,6 +88,8 @@ type type_def_meta =
   {epath: path; ekind: type_def_kind; emods: ClassMods.t; emembers: member list}
 
 type type_def = type_def_meta span
+
+type module_def = {mimports: path list; mdefs: type_def list; mpackage: pack}
 
 let s_pos p = Printf.sprintf "%s: %d:%d" p.pfile p.pmin.pline p.pmin.pcol
 
