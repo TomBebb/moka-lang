@@ -13,6 +13,7 @@ type ty_expr_def =
   | TEIf of ty_expr * ty_expr * ty_expr option
   | TEWhile of ty_expr * ty_expr
   | TEVar of ty option * string * ty_expr
+  | TENew of path * ty_expr list
 
 and ty_expr_meta = {edef: ty_expr_def; ety: ty}
 
@@ -21,6 +22,7 @@ and ty_expr = ty_expr_meta span
 type ty_member_kind =
   | TMVar of ty * ty_expr option
   | TMFunc of param list * ty * ty_expr
+  | TMConstr of param list * ty_expr
 
 type ty_member_def =
   { tmname: string
@@ -182,6 +184,12 @@ let rec type_expr ctx ex =
       if ty_of cond != TPrim TBool then
         raise (Error (Expected (TPrim TBool), pos)) ;
       mk (TEWhile (cond, body)) (TPrim TVoid)
+  | ENew (path, args) ->
+      let _ = match Hashtbl.find_opt ctx.ttypedefs path with
+      | Some d -> d
+      | None -> raise (Error (UnresolvedPath path, pos)) in
+      let args = List.map (type_expr ctx) args in
+      mk (TENew (path, args)) (TPath path)
 
 and type_of_member ctx (def, pos) =
   match def.mkind with
@@ -190,6 +198,8 @@ and type_of_member ctx (def, pos) =
   | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
   | MFunc (params, ret, _) ->
       TFunc (List.map (fun par -> par.ptype) params, ret)
+  | MConstr (params, _) ->
+      TFunc (List.map (fun par -> par.ptype) params, TPrim TVoid)
 
 and find_var ctx name =
   let res = ref None in
@@ -235,6 +245,12 @@ let type_member ctx (def, pos) =
         let body = type_expr ctx body in
         let _ = leave_block ctx in
         TMFunc (params, ret, body)
+    | MConstr (params, body) ->
+        let _ = enter_block ctx in
+        List.iter (fun par -> set_var ctx par.pname par.ptype) params ;
+        let body = type_expr ctx body in
+        let _ = leave_block ctx in
+        TMConstr (params, body)
   in
   ( { tmkind= kind
     ; tmname= def.mname
@@ -279,3 +295,4 @@ let rec s_ty_expr tabs (meta, _) =
       Printf.sprintf "var %s = %s" name (s_ty_expr tabs ex)
   | TEVar (Some t, name, ex) ->
       Printf.sprintf "var %s: %s = %s" name (s_ty t) (s_ty_expr tabs ex)
+  | TENew (path, args) -> Printf.sprintf "new %s(%s)" (s_path path) (String.concat "," (List.map (s_ty_expr tabs) args))

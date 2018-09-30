@@ -15,6 +15,7 @@ type keyword =
   | KVal
   | KFunc
   | KExtern
+  | KNew
   (* modifiers *)
   | KStatic
   | KPublic
@@ -63,6 +64,7 @@ let s_keyword = function
   | KVal -> "val"
   | KFunc -> "func"
   | KExtern -> "extern"
+  | KNew -> "new"
   (* modifiers *)
   | KStatic -> "static"
   | KPublic -> "public"

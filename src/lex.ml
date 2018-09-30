@@ -73,6 +73,7 @@ let rec token buf =
   | "var" -> mk (TKeyword KVar)
   | "val" -> mk (TKeyword KVal)
   | "func" -> mk (TKeyword KFunc)
+  | "new" -> mk (TKeyword KNew)
   | "static" -> mk (TKeyword KStatic)
   | "public" -> mk (TKeyword KPublic)
   | "private" -> mk (TKeyword KPrivate)

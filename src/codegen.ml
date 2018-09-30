@@ -21,9 +21,9 @@ type gen_ctx =
   ; gen_main: llvalue
   ; mutable gen_func: llvalue
   ; gen_builder: llbuilder
-  ; gen_block: llbasicblock
   ; gen_vars: (string, llvalue) Hashtbl.t Stack.t
-  ; gen_this: llvalue
+  ; mutable gen_this: llvalue
+  ; mutable gen_this_ty: lltype
   ; mutable gen_local_path: path option
   ; gen_typedefs: (path, gen_def_meta) Hashtbl.t }
 
@@ -35,14 +35,15 @@ let init () =
   let sig_ty = function_type (i32_type ctx) (Array.of_list []) in
   let main_func = declare_function "main" sig_ty main_mod in
   let entry = append_block ctx "entry" main_func in
+  position_at_end entry builder;
   { gen_ctx= ctx
   ; gen_mod= main_mod
   ; gen_main= main_func
   ; gen_func= main_func
   ; gen_vars= Stack.create ()
   ; gen_this= Llvm.const_int (Llvm.i1_type ctx) 0
+  ; gen_this_ty = void_type ctx
   ; gen_builder= builder
-  ; gen_block= entry
   ; gen_local_path= None
   ; gen_typedefs= Hashtbl.create 10 }
 
@@ -148,7 +149,7 @@ let rec gen_expr ctx (def, pos) =
   | TEBlock exprs ->
       let last = ref None in
       List.iter (fun ex -> last := Some (gen_expr ctx ex)) exprs ;
-      get "no expressions found" !last
+      gen_const ctx (CBool false)
   | TEIf (cond, if_e, Some else_e) ->
       let cond = gen_expr ctx cond in
       let then_bl = append_block ctx.gen_ctx "then" ctx.gen_func in
@@ -180,28 +181,52 @@ let rec gen_expr ctx (def, pos) =
       let func = gen_expr ctx func in
       let args = List.map (gen_expr ctx) args in
       build_call func (Array.of_list args) "func_res" ctx.gen_builder
+  | TENew (path, args) ->
+      let meta = Hashtbl.find ctx.gen_typedefs path in
+      let constr = Hashtbl.find meta.dstatics "new" in
+      let args = List.map (gen_expr ctx) args in
+      build_call constr (Array.of_list args) "new" ctx.gen_builder
   | _ -> raise (Failure (s_ty_expr "" (def, pos)))
 
 let pre_gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
-  let types = Array.of_list [] in
+  let types = ref [] in
   let indices = Hashtbl.create 16 in
-  let push ty = types.(Array.length types) <- ty in
+  let push ty = types := !types @ [ty] in
   let statics = Hashtbl.create 16 in
   ctx.gen_local_path <- Some meta.tepath ;
+  (* generate fields *)
+  List.iter
+    (fun (field, _) ->
+      let is_static = MemberMods.mem MStatic field.tmmods in
+      match field.tmkind with
+      | TMVar (ty, _) when not is_static ->
+          let llty = gen_ty ctx ty in
+            Hashtbl.add indices field.tmname (List.length !types) ;
+            push llty
+      | _ -> ()
+    )
+    meta.temembers ;
+  (match meta.tekind with
+  | EClass _ | EStruct ->
+      let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
+      struct_set_body gen (Array.of_list !types) false ;
+      let dmeta =
+        {dstruct= gen; dfield_indicies= indices; dstatics= statics}
+      in
+      ctx.gen_this_ty <- gen;
+      Hashtbl.add ctx.gen_typedefs meta.tepath dmeta);
+
   List.iter
     (fun (field, _) ->
       let is_static = MemberMods.mem MStatic field.tmmods in
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
-      | TMVar (ty, _) ->
+      | TMVar (ty, _) when is_static ->
           let llty = gen_ty ctx ty in
-          if is_static then
-            let global = Llvm.declare_global llty name ctx.gen_mod in
-            Hashtbl.add statics field.tmname global
-          else (
-            Hashtbl.add indices field.tmname (Array.length types) ;
-            push llty )
+          let global = Llvm.declare_global llty name ctx.gen_mod in
+          Hashtbl.add statics field.tmname global
+      | TMVar (_, _) -> ()
       | TMFunc ([], TPrim TInt, _) when is_static && field.tmname = "main" ->
           ()
       | TMFunc (params, ret, _) ->
@@ -217,20 +242,20 @@ let pre_gen_typedef ctx (meta, _) =
             Llvm.function_type (gen_ty ctx ret) (Array.of_list !llpars)
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
-          Hashtbl.add statics field.tmname func )
-    meta.temembers ;
-  match meta.tekind with
-  | EClass _ | EStruct ->
-      let gen = Llvm.named_struct_type ctx.gen_ctx (s_path meta.tepath) in
-      struct_set_body gen types false ;
-      let dmeta =
-        {dstruct= gen; dfield_indicies= indices; dstatics= statics}
-      in
-      Hashtbl.add ctx.gen_typedefs meta.tepath dmeta
+          Hashtbl.add statics field.tmname func
+      | TMConstr (params, _) ->
+          let params = List.map (fun param -> gen_ty ctx param.ptype) params in
+          let sig_ty = Llvm.function_type ctx.gen_this_ty (Array.of_list params) in
+          let func = Llvm.declare_function name sig_ty ctx.gen_mod in
+          Hashtbl.add statics field.tmname func
+        )
+    meta.temembers
 
 let gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
   ctx.gen_local_path <- Some meta.tepath ;
+  let meta_meta = Hashtbl.find ctx.gen_typedefs meta.tepath in
+  ctx.gen_this_ty <- meta_meta.dstruct;
   List.iter
     (fun (field, _) ->
       let is_static = MemberMods.mem MStatic field.tmmods in
@@ -272,9 +297,29 @@ let gen_typedef ctx (meta, _) =
               else build_ret va ctx.gen_builder
             in
             () ) ;
-          let _ = leave_block ctx in
-          Llvm.position_at_end ctx.gen_block ctx.gen_builder ;
-          ()
+          ignore (leave_block ctx)
+      | TMConstr (args, body) ->
+        let func = get "constructor not found" (lookup_function name ctx.gen_mod) in
+        let entry = append_block ctx.gen_ctx "entry" func in
+        ctx.gen_func <- func;
+        position_at_end entry ctx.gen_builder;
+
+          enter_block ctx ;
+          let this_ptr = build_alloca ctx.gen_this_ty "this_ptr" ctx.gen_builder in
+          ctx.gen_this <- this_ptr;
+          List.iteri
+            (fun index par ->
+              let param = Llvm.param func index in
+              let ptr =
+                build_alloca (type_of param) par.pname ctx.gen_builder
+              in
+              let _ = build_store param ptr ctx.gen_builder in
+              set_var ctx par.pname ptr )
+            args ;
+          ignore (gen_expr ctx body);
+          ignore (leave_block ctx);
+          let this_val = build_load this_ptr "this" ctx.gen_builder in
+          ignore (build_ret this_val ctx.gen_builder)
       | _ -> () )
     meta.temembers
 

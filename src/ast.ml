@@ -31,6 +31,7 @@ type expr_def =
   | EIf of expr * expr * expr option
   | EWhile of expr * expr
   | EVar of ty option * string * expr
+  | ENew of path * expr list
 
 and expr = expr_def span
 
@@ -39,6 +40,7 @@ type param = {pname: string; ptype: ty}
 type member_kind =
   | MVar of ty option * expr option
   | MFunc of param list * ty * expr
+  | MConstr of param list * expr
 
 type member_mod = MStatic | MPublic | MPrivate | MExtern
 
@@ -116,3 +118,4 @@ let rec s_expr tabs (def, _) =
   | EVar (None, name, ex) -> Printf.sprintf "var %s = %s" name (s_expr tabs ex)
   | EVar (Some t, name, ex) ->
       Printf.sprintf "var %s: %s = %s" name (s_ty t) (s_expr tabs ex)
+  | ENew (path, args) -> Printf.sprintf "new %s(%s)" (s_path path) (String.concat "," (List.map (s_expr tabs) args))
