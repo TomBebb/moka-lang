@@ -34,7 +34,6 @@ type expr_def =
   | EVar of ty option * string * expr
   | ENew of path * expr list
 
-
 and expr = expr_def span
 
 type param = {pname: string; ptype: ty}

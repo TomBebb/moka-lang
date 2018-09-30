@@ -114,7 +114,11 @@ let rec type_expr ctx ex =
   in
   match edef with
   | EConst c -> mk (TEConst c) (TPrim (type_of_const c))
-  | EThis -> mk TEThis (match ctx.tthis with |Some t -> TPath t | None -> raise (Error (UnresolvedThis, pos)))
+  | EThis ->
+      mk TEThis
+        ( match ctx.tthis with
+        | Some t -> TPath t
+        | None -> raise (Error (UnresolvedThis, pos)) )
   | EIdent id -> (
       let v = find_var ctx id in
       match v with

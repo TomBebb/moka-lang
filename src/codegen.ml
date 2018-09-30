@@ -27,13 +27,20 @@ type gen_ctx =
   ; mutable gen_this: llvalue option
   ; mutable gen_this_ty: lltype
   ; mutable gen_local_path: path option
-  ; gen_typedefs: (path, gen_def_meta) Hashtbl.t }
+  ; gen_typedefs: (path, gen_def_meta) Hashtbl.t;
+  gen_size_t: lltype }
 
 let init () =
   Llvm_all_backends.initialize () ;
   let ctx = create_context () in
   let main_mod = create_module ctx "main" in
   let builder = builder ctx in
+
+  let size_t_size = Ctypes.sizeof Ctypes.size_t in
+  let size_t = integer_type ctx (size_t_size * 8) in
+  let malloc_sig = function_type (pointer_type (void_type ctx)) (Array.of_list [size_t]) in
+  ignore (declare_function "GC_malloc" malloc_sig main_mod);
+
   let sig_ty = function_type (i32_type ctx) (Array.of_list []) in
   let main_func = declare_function "main" sig_ty main_mod in
   let entry = append_block ctx "entry" main_func in
@@ -47,7 +54,8 @@ let init () =
   ; gen_this_ty= void_type ctx
   ; gen_builder= builder
   ; gen_local_path= None
-  ; gen_typedefs= Hashtbl.create 10 }
+  ; gen_typedefs= Hashtbl.create 10;
+  gen_size_t = size_t }
 
 let enter_block ctx = Stack.push (Hashtbl.create 12) ctx.gen_vars
 
@@ -123,16 +131,18 @@ let rec gen_expr ctx (def, pos) =
       match find_var ctx id false with
       | Some v -> v
       | None -> raise (Error (UnresolvedLHS, pos)) )
-  | TEField (obj, f) ->
-    let path = match ty_of obj with
-    | TPath p -> p
-    | _ -> raise (Failure "only path can be indexed") in
-    let obj = gen_expr ctx obj in
-    let def = Hashtbl.find ctx.gen_typedefs path in
-    let index = Hashtbl.find def.dfield_indicies f in
-    build_struct_gep obj index f ctx.gen_builder
-  | _ -> raise (Error (UnresolvedLHS, pos))
-in
+    | TEField (obj, f) ->
+        let path =
+          match ty_of obj with
+          | TPath p -> p
+          | _ -> raise (Failure "only path can be indexed")
+        in
+        let obj = gen_expr ctx obj in
+        let def = Hashtbl.find ctx.gen_typedefs path in
+        let index = Hashtbl.find def.dfield_indicies f in
+        build_struct_gep obj index f ctx.gen_builder
+    | _ -> raise (Error (UnresolvedLHS, pos))
+  in
   match def.edef with
   | TEConst c -> gen_const ctx c
   | TEThis -> get "unresolved this" ctx.gen_this
@@ -142,8 +152,8 @@ in
       | Some v -> v
       | None -> raise (Typer.Error (UnresolvedIdent id, pos)) )
   | TEField (_, f) ->
-    let ptr = gen_expr_lhs ctx (def, pos) in
-    build_load ptr f ctx.gen_builder
+      let ptr = gen_expr_lhs ctx (def, pos) in
+      build_load ptr f ctx.gen_builder
   | TEVar (_, name, v) ->
       let v = gen_expr ctx v in
       let ptr = Llvm.build_alloca (type_of v) name ctx.gen_builder in
@@ -207,19 +217,20 @@ in
       cond
   | TECall ((def, pos), args) ->
       let args = ref (List.map (gen_expr ctx) args) in
-      let func = match def.edef with
-      | TEField (o, f) ->
-        let obj_t = ty_of o in
-        let path = match obj_t with
-        | TPath p -> p
-        | _ -> raise (Failure "no path") in
-
-        let meta = Hashtbl.find ctx.gen_typedefs path in
-        print_endline f;
-        let meth = Hashtbl.find meta.dmethods f in
-        args := [(get "this" ctx.gen_this)] @ !args;
-        meth
-      | _ -> gen_expr ctx (def, pos) in
+      let func =
+        match def.edef with
+        | TEField (o, f) ->
+            let obj_t = ty_of o in
+            let path =
+              match obj_t with TPath p -> p | _ -> raise (Failure "no path")
+            in
+            let meta = Hashtbl.find ctx.gen_typedefs path in
+            print_endline f ;
+            let meth = Hashtbl.find meta.dmethods f in
+            args := [get "this" ctx.gen_this] @ !args ;
+            meth
+        | _ -> gen_expr ctx (def, pos)
+      in
       build_call func (Array.of_list !args) "func_res" ctx.gen_builder
   | TENew (path, args) ->
       let meta = Hashtbl.find ctx.gen_typedefs path in
@@ -253,7 +264,10 @@ let pre_gen_typedef ctx (meta, _) =
       let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
       struct_set_body gen (Array.of_list !types) false ;
       let dmeta =
-        {dstruct= gen; dfield_indicies= indices; dstatics= statics; dmethods = methods}
+        { dstruct= gen
+        ; dfield_indicies= indices
+        ; dstatics= statics
+        ; dmethods= methods }
       in
       ctx.gen_this_ty <- gen ;
       Hashtbl.add ctx.gen_typedefs meta.tepath dmeta ) ;
@@ -282,20 +296,27 @@ let pre_gen_typedef ctx (meta, _) =
             Llvm.function_type (gen_ty ctx ret) (Array.of_list !llpars)
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
-
-          Hashtbl.add (if is_static then statics else methods) field.tmname func
+          Hashtbl.add
+            (if is_static then statics else methods)
+            field.tmname func
       | TMConstr (params, _) ->
           let params = List.map (fun param -> gen_ty ctx param.ptype) params in
           let sig_ty =
             Llvm.function_type ctx.gen_this_ty (Array.of_list params)
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
-          Hashtbl.add statics field.tmname func ) meta.temembers;
-    Hashtbl.iter (fun name func -> print_endline (sprintf "%s: %s" name (string_of_lltype (type_of func)))) methods;
-    meta.temembers
+          Hashtbl.add statics field.tmname func )
+    meta.temembers ;
+  Hashtbl.iter
+    (fun name func ->
+      print_endline (sprintf "%s: %s" name (string_of_lltype (type_of func)))
+      )
+    methods ;
+  meta.temembers
 
 let gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
+
   ctx.gen_local_path <- Some meta.tepath ;
   let meta_meta = Hashtbl.find ctx.gen_typedefs meta.tepath in
   ctx.gen_this_ty <- meta_meta.dstruct ;
@@ -355,8 +376,13 @@ let gen_typedef ctx (meta, _) =
           ctx.gen_func <- func ;
           position_at_end entry ctx.gen_builder ;
           enter_block ctx ;
-          let this_ptr =
-            build_alloca ctx.gen_this_ty "this_ptr" ctx.gen_builder
+          let this_ptr = match meta.tekind with
+          | EStruct -> build_alloca ctx.gen_this_ty "this_ptr" ctx.gen_builder
+          | EClass _ ->
+            let malloc = get "no gc func found" (lookup_function "GC_malloc" ctx.gen_mod) in
+            let this_size = size_of ctx.gen_this_ty in
+            let ptr = build_call malloc (Array.of_list [this_size]) "this_ptr" ctx.gen_builder in
+            build_pointercast ptr (pointer_type ctx.gen_this_ty) "ptr" ctx.gen_builder         
           in
           ctx.gen_this <- Some this_ptr ;
           List.iteri
