@@ -90,7 +90,7 @@ let rec parse_expr tks =
         let args = parse_exprs tks TCloseParen (Some TComma) in
         let last = expect tks [TCloseParen] "constructor call" in
         mk_pos (ENew (path, args)) first_pos last
-    | TKeyword (KVar | KVal as kind) ->
+    | TKeyword ((KVar | KVal) as kind) ->
         let name, _ = expect_ident tks in
         let ty =
           if next_is tks TColon then
@@ -102,7 +102,9 @@ let rec parse_expr tks =
         let _ = expect tks [TBinOp OpAssign] "variable declaration" in
         let value = parse_expr tks in
         let _, last_pos = value in
-        mk_pos (EVar ((if kind == KVar then Variable else Constant), ty, name, value)) first_pos last_pos
+        mk_pos
+          (EVar ((if kind == KVar then Variable else Constant), ty, name, value))
+          first_pos last_pos
     | TOpenParen ->
         let inner = parse_expr tks in
         let last = expect tks [TCloseParen] "parenthesis" in
@@ -247,7 +249,11 @@ let parse_member tks =
           Some (parse_expr tks)
         else None
       in
-      ({mname= name; mkind= MVar ((if v = KVar then Variable else Constant), ty, ex); mmods= !mods; matts= atts}, pos)
+      ( { mname= name
+        ; mkind= MVar ((if v = KVar then Variable else Constant), ty, ex)
+        ; mmods= !mods
+        ; matts= atts }
+      , pos )
   | _ -> raise (Error (mk_one (Unexpected (def, "member")) pos))
 
 let rec parse_members tks term =

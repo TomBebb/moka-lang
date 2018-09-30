@@ -8,7 +8,7 @@ type const =
   | CBool of bool
   | CNull
 
-type binop = OpAdd | OpSub | OpMul | OpDiv | OpAssign | OpEq
+type binop = OpAdd | OpSub | OpMul | OpDiv | OpAssign | OpEq | OpAddAssign | OpSubAssign | OpMulAssign | OpDivAssign
 
 type unop = OpNeg | OpNot
 
@@ -20,9 +20,7 @@ type 'a span = 'a * pos
 
 let span_v (v, _) = v
 
-type variability =
-  | Variable
-  | Constant
+type variability = Variable | Constant
 
 type expr_def =
   | EThis
@@ -97,13 +95,25 @@ let s_binop = function
   | OpDiv -> "/"
   | OpAssign -> "="
   | OpEq -> "=="
+  | OpAddAssign -> "+="
+  | OpSubAssign -> "-="
+  | OpMulAssign -> "*="
+  | OpDivAssign -> "/="
 
 let s_unop = function OpNeg -> "-" | OpNot -> "!"
 
+let s_variability = function Variable -> "var" | Constant -> "val"
 
-let s_variability = function
-  | Variable -> "var"
-  | Constant -> "val"
+let is_assign = function
+  | OpAssign | OpAddAssign | OpSubAssign | OpMulAssign | OpDivAssign -> true
+  | _ -> false
+
+let inner_assign = function
+  | OpAddAssign -> Some OpAdd
+  | OpSubAssign -> Some OpSub
+  | OpMulAssign -> Some OpMul
+  | OpDivAssign -> Some OpDiv
+  | _ -> None
 
 let rec s_expr tabs (def, _) =
   match def with
@@ -127,7 +137,8 @@ let rec s_expr tabs (def, _) =
       "if " ^ s_expr tabs cond ^ " " ^ s_expr tabs if_e ^ " else "
       ^ s_expr tabs else_e
   | EWhile (cond, body) -> "while " ^ s_expr tabs cond ^ " " ^ s_expr tabs body
-  | EVar (v, None, name, ex) -> sprintf "%s %s = %s" (s_variability v) name (s_expr tabs ex)
+  | EVar (v, None, name, ex) ->
+      sprintf "%s %s = %s" (s_variability v) name (s_expr tabs ex)
   | EVar (v, Some t, name, ex) ->
       sprintf "%s %s: %s = %s" (s_variability v) name (s_ty t) (s_expr tabs ex)
   | ENew (path, args) ->

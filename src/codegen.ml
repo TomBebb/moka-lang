@@ -168,13 +168,16 @@ let rec gen_expr ctx (def, pos) =
       let a_ref = gen_expr_lhs ctx a in
       let b_val = gen_expr ctx b in
       Llvm.build_store b_val a_ref ctx.gen_builder
-  | TEBinOp (((OpAdd | OpSub | OpMul | OpDiv) as op), a, b) ->
+  | TEBinOp (op, a, b) ->
       let a_val = gen_expr ctx a in
       let b_val = gen_expr ctx b in
       assert (Llvm.type_of a_val = gen_ty ctx (span_v a).ety) ;
       assert (Llvm.type_of b_val = gen_ty ctx (span_v b).ety) ;
       let ty = def.ety in
-      ( match (op, is_real ty) with
+      let (op, assign) = match inner_assign op with
+      | Some v -> (v, true)
+      | None -> (op, false)  in
+      let res = ( match (op, is_real ty) with
       | OpAdd, false -> Llvm.build_add
       | OpAdd, true -> Llvm.build_fadd
       | OpSub, false -> Llvm.build_sub
@@ -184,7 +187,10 @@ let rec gen_expr ctx (def, pos) =
       | OpDiv, false -> Llvm.build_sdiv
       | OpDiv, true -> Llvm.build_fdiv
       | _ -> raise (Failure ("op " ^ s_binop op ^ " unimplemented")) )
-        a_val b_val "tmp_op" ctx.gen_builder
+        a_val b_val "tmp_op" ctx.gen_builder in
+      if assign then
+        ignore (build_store res (gen_expr_lhs ctx a) ctx.gen_builder) ;
+        res
   | TEBlock exprs -> (
       let last = ref None in
       List.iter (fun ex -> last := Some (gen_expr ctx ex)) exprs ;
@@ -232,11 +238,10 @@ let rec gen_expr ctx (def, pos) =
             meth
         | _ -> gen_expr ctx (def, pos)
       in
-      let res = build_call func (Array.of_list !args) "func_res" ctx.gen_builder in
-      if ty_of (def, pos) = TPrim TVoid then
-        gen_const ctx CNull
-      else
-        res
+      let res =
+        build_call func (Array.of_list !args) "func_res" ctx.gen_builder
+      in
+      if ty_of (def, pos) = TPrim TVoid then gen_const ctx CNull else res
   | TENew (path, args) ->
       let meta = Hashtbl.find ctx.gen_typedefs path in
       let constr = Hashtbl.find meta.dstatics "new" in
@@ -284,7 +289,7 @@ let pre_gen_typedef ctx (meta, _) =
       | TMVar (Constant, _, Some v) when is_static ->
           let v = gen_expr ctx v in
           let global = Llvm.define_global name v ctx.gen_mod in
-          set_unnamed_addr true global;
+          set_unnamed_addr true global ;
           Hashtbl.add statics field.tmname global
       | TMVar (_, ty, None) when is_static ->
           let llty = gen_ty ctx ty in
@@ -331,16 +336,16 @@ let gen_typedef ctx (meta, _) =
   ctx.gen_this_ty <- meta_meta.dstruct ;
   List.iter
     (fun (field, _) ->
-      let is_static = MemberMods.mem MStatic field.tmmods in  
+      let is_static = MemberMods.mem MStatic field.tmmods in
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
       | TMVar (Variable, _, Some va) when is_static ->
           let global =
             get "global not found" (lookup_global name ctx.gen_mod)
           in
-          set_global_constant true global;
-          set_externally_initialized false global; 
-          set_initializer global (gen_expr ctx va);
+          set_global_constant true global ;
+          set_externally_initialized false global ;
+          set_initializer global (gen_expr ctx va)
       | TMFunc (args, ret, ex) when not (MemberMods.mem MExtern field.tmmods)
         ->
           let is_main = is_static && field.tmname = "main" && args = [] in
@@ -424,7 +429,7 @@ let gen_typedef ctx (meta, _) =
     meta.temembers
 
 let optimize ctx =
-  print_endline "Optimizing";
+  print_endline "Optimizing" ;
   let pmb = Llvm_passmgr_builder.create () in
   Llvm_passmgr_builder.set_opt_level 4 pmb ;
   Llvm_passmgr_builder.use_inliner_with_threshold 3 pmb ;

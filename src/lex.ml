@@ -98,6 +98,10 @@ let rec token buf =
   | '{' -> mk TOpenBrace
   | '}' -> mk TCloseBrace
   | '@' -> mk TAt
+  | "+=" -> mk (TBinOp OpAddAssign)
+  | "-=" -> mk (TBinOp OpSubAssign)
+  | "*=" -> mk (TBinOp OpMulAssign)
+  | "/=" -> mk (TBinOp OpDivAssign)
   | '+' -> mk (TBinOp OpAdd)
   | '-' -> mk (TBinOp OpSub)
   | '*' -> mk (TBinOp OpMul)

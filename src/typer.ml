@@ -53,6 +53,7 @@ type error_kind =
   | UnresolvedThis
   | Expected of ty
   | CannotCall of ty
+  | InvalidLHS
 
 let error_msg = function
   | UnresolvedIdent s -> sprintf "Failed to resolve identifier '%s'" s
@@ -69,6 +70,7 @@ let error_msg = function
       sprintf "Type of field '%s' could not be resolved" name
   | Expected t -> sprintf "Expected type %s" (s_ty t)
   | CannotCall t -> sprintf "The type %s cannot be called" (s_ty t)
+  | InvalidLHS -> "Invalid left-hand side of assignment"
 
 exception Error of error_kind span
 
@@ -108,9 +110,15 @@ let ty_of tex =
 let set_var ctx name ty = Hashtbl.add (Stack.top ctx.tvars) name ty
 
 let rec type_expr ctx ex =
+
   let edef, pos = ex in
   let mk def ty =
     ({edef= def; ety= ty}, {pfile= pos.pfile; pmin= pos.pmin; pmax= pos.pmax})
+  in
+  let type_expr_lhs ctx (edef, pos) =
+    match edef with
+    | EIdent _ | EField _ -> type_expr ctx (edef, pos)
+    | _ -> raise  (Error (InvalidLHS, pos))
   in
   match edef with
   | EConst c -> mk (TEConst c) (TPrim (type_of_const c))
@@ -137,9 +145,9 @@ let rec type_expr ctx ex =
   | EUnOp (op, v) ->
       let v = type_expr ctx v in
       mk (TEUnOp (op, v)) (ty_of v)
-  | EBinOp (op, a, b) -> (
-      let a = type_expr ctx a in
-      let b = type_expr ctx b in
+  | EBinOp (op, a_e, b_e) -> (
+      let a = type_expr ctx a_e in
+      let b = type_expr ctx b_e in
       let a_ty = ty_of a in
       let b_ty = ty_of b in
       let res_ty =
@@ -147,8 +155,12 @@ let rec type_expr ctx ex =
         | OpAdd | OpSub | OpDiv | OpMul ->
             if is_numeric a_ty && is_numeric b_ty && a_ty = b_ty then Some a_ty
             else None
-        | OpAssign -> if a_ty = b_ty then Some a_ty else None
         | OpEq -> if a_ty = b_ty then Some (TPrim TBool) else None
+        | _ when is_assign op ->
+          let lhs = type_expr_lhs ctx a_e in
+          assert(ty_of lhs = a_ty);
+          if a_ty = b_ty then Some a_ty else None
+        | _ -> assert(false)
       in
       match res_ty with
       | None -> raise (Error (CannotBinOp (op, a_ty, b_ty), pos))
@@ -250,7 +262,8 @@ let type_member ctx (def, pos) =
     | MVar (v, _, Some ex) ->
         let ex = type_expr ctx ex in
         TMVar (v, ty_of ex, Some ex)
-    | MVar (_, None, None) -> raise (Error (UnresolvedFieldType def.mname, pos))
+    | MVar (_, None, None) ->
+        raise (Error (UnresolvedFieldType def.mname, pos))
     | MFunc (params, ret, body) ->
         let _ = enter_block ctx in
         List.iter (fun par -> set_var ctx par.pname par.ptype) params ;
@@ -307,7 +320,8 @@ let rec s_ty_expr tabs (meta, _) =
   | TEVar (v, None, name, ex) ->
       Printf.sprintf "%s %s = %s" (s_variability v) name (s_ty_expr tabs ex)
   | TEVar (v, Some t, name, ex) ->
-      Printf.sprintf "%s %s: %s = %s" (s_variability v) name (s_ty t) (s_ty_expr tabs ex)
+      Printf.sprintf "%s %s: %s = %s" (s_variability v) name (s_ty t)
+        (s_ty_expr tabs ex)
   | TENew (path, args) ->
       Printf.sprintf "new %s(%s)" (s_path path)
         (String.concat "," (List.map (s_ty_expr tabs) args))
