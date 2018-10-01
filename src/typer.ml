@@ -4,6 +4,7 @@ open Printf
 
 type ty_expr_def =
   | TEThis
+  | TESuper
   | TEConst of const
   | TEIdent of string
   | TEField of ty_expr * string
@@ -57,6 +58,7 @@ type error_kind =
   | UnresolvedFieldType of string
   | CannotAssign
   | UnresolvedThis
+  | UnresolvedSuper
   | Expected of ty * ty
   | CannotCall of ty
   | InvalidLHS
@@ -65,6 +67,7 @@ let error_msg = function
   | UnresolvedIdent s -> sprintf "Failed to resolve identifier '%s'" s
   | UnresolvedPath p -> sprintf "Unresolved path '%s'" (s_path p)
   | UnresolvedThis -> "Unresolved this"
+  | UnresolvedSuper -> "Unresolved super"
   | CannotBinOp (op, a, b) ->
       sprintf "Operation '%s' cannot be performed on types %s an %s"
         (s_binop op) (s_ty a) (s_ty b)
@@ -97,25 +100,36 @@ let init () =
   ; tin_static= true
   ; tin_constructor= false }
 
+let unwrap_or_err o err = match o with Some v -> v | None -> raise err
+
+let find_or_err tbl key err = unwrap_or_err (Hashtbl.find_opt tbl key) err
+
 let enter_block ctx = Stack.push (Hashtbl.create 12) ctx.tvars
 
 let leave_block ctx = Stack.pop ctx.tvars
 
-let resolve_field ctx ty name pos =
+let rec try_resolve_field ctx ty name pos =
   let path =
     match ty with
     | TClass p -> p
     | TPath p -> p
     | _ -> raise (Error (CannotField ty, pos))
   in
-  let field, _ =
-    match Hashtbl.find_opt ctx.ttypedefs path with
-    | Some def -> def
-    | _ -> raise (Error (UnresolvedPath path, pos))
+  let tydef, _ =
+    find_or_err ctx.ttypedefs path (Error (UnresolvedPath path, pos))
   in
-  match List.find_opt (fun (mem, _) -> mem.mname = name) field.emembers with
-  | Some mem -> mem
-  | None -> raise (Error (UnresolvedField (ty, name), pos))
+  match List.find_opt (fun (mem, _) -> mem.mname = name) tydef.emembers with
+  | Some mem -> Some mem
+  | None -> (
+    match tydef.ekind with
+    | EClass {cextends= Some ext; _} ->
+        try_resolve_field ctx (TPath ext) name pos
+    | _ -> None )
+
+let resolve_field ctx ty name pos =
+  unwrap_or_err
+    (try_resolve_field ctx ty name pos)
+    (Error (UnresolvedField (ty, name), pos))
 
 let ty_of tex =
   let meta, _ = tex in
@@ -147,7 +161,7 @@ let rec type_expr ctx ex =
   let type_expr_lhs ctx (edef, pos) =
     match edef with
     | EIdent id -> (
-      match find_var ctx id with
+      match find_var ctx id pos with
       | Some (Variable, v) -> mk (TEIdent id) v
       | Some (Constant, _) -> raise (Error (CannotAssign, pos))
       | _ -> raise (Error (UnresolvedIdent id, pos)) )
@@ -162,12 +176,22 @@ let rec type_expr ctx ex =
   match edef with
   | EConst c -> mk (TEConst c) (TPrim (type_of_const c))
   | EThis ->
-      mk TEThis
-        ( match ctx.tthis with
-        | Some t -> TPath t
-        | None -> raise (Error (UnresolvedThis, pos)) )
+      let path = unwrap_or_err ctx.tthis (Error (UnresolvedThis, pos)) in
+      mk TEThis (TPath path)
+  | ESuper ->
+      let path = unwrap_or_err ctx.tthis (Error (UnresolvedThis, pos)) in
+      let this_def, _ =
+        find_or_err ctx.ttypedefs path (Error (UnresolvedThis, pos))
+      in
+      let extends =
+        match this_def.ekind with
+        | EClass def ->
+            unwrap_or_err def.cextends (Error (UnresolvedSuper, pos))
+        | _ -> raise (Error (UnresolvedSuper, pos))
+      in
+      mk TESuper (TPath extends)
   | EIdent id -> (
-      let v = find_var ctx id in
+      let v = find_var ctx id pos in
       match v with
       | Some (_, v) -> mk (TEIdent id) v
       | None when Hashtbl.mem ctx.ttypedefs ([], id) ->
@@ -256,9 +280,7 @@ let rec type_expr ctx ex =
       mk (TEWhile (cond, body)) (TPrim TVoid)
   | ENew (path, args) ->
       let _ =
-        match Hashtbl.find_opt ctx.ttypedefs path with
-        | Some d -> d
-        | None -> raise (Error (UnresolvedPath path, pos))
+        find_or_err ctx.ttypedefs path (Error (UnresolvedPath path, pos))
       in
       let args = List.map (type_expr ctx) args in
       mk (TENew (path, args)) (TPath path)
@@ -274,7 +296,7 @@ and type_of_member ctx (def, pos) =
   | MConstr (params, _) ->
       (Constant, TFunc (List.map (fun par -> par.ptype) params, TPrim TVoid))
 
-and find_var ctx name =
+and find_var ctx name pos =
   let res : (variability * ty) option ref = ref None in
   Stack.iter
     (fun tbl ->
@@ -284,18 +306,13 @@ and find_var ctx name =
         | Some v -> res := Some v
         | None -> () )
     ctx.tvars ;
-  let this =
-    match ctx.tthis with
-    | Some t -> t
-    | None -> raise (Failure "No this vlaue")
-  in
-  let def, _ = Hashtbl.find ctx.ttypedefs this in
-  List.iter
-    (fun (meta, pos) ->
-      if meta.mname = name then
-        let v, ty = type_of_member ctx (meta, pos) in
-        res := Some ((if ctx.tin_constructor then Variable else v), ty) )
-    def.emembers ;
+  ( match ctx.tthis with
+  | None -> ()
+  | Some t -> (
+      let mem = try_resolve_field ctx (TPath t) name pos in
+      match mem with
+      | Some mem -> res := Some (type_of_member ctx mem)
+      | _ -> () ) ) ;
   !res
 
 and type_of_const = function
@@ -356,6 +373,7 @@ let type_mod ctx m =
 
 let rec s_ty_expr tabs (meta, _) =
   match meta.edef with
+  | TESuper -> "super"
   | TEThis -> "this"
   | TEConst c -> s_const c
   | TEIdent id -> id

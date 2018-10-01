@@ -99,6 +99,7 @@ let rec parse_expr tks =
         let _, last = inner in
         mk_pos (EUnOp (op, inner)) first_pos last
     | TKeyword KThis -> mk_one EThis first_pos
+    | TKeyword KSuper -> mk_one ESuper first_pos
     | TKeyword KNew ->
         let path = parse_path tks in
         ignore (expect tks [TOpenParen] "constructor call") ;
@@ -301,7 +302,10 @@ let parse_type_def tks =
   | TKeyword KClass ->
       let name, _ = expect_ident tks in
       let ext =
-        if next_is tks (TKeyword KExtends) then Some (parse_path tks) else None
+        if next_is tks (TKeyword KExtends) then (
+          ignore (Stream.next tks) ;
+          Some (parse_path tks) )
+        else None
       in
       let cl = {cextends= ext; cimplements= []} in
       let _ = expect tks [TOpenBrace] "class declaration" in

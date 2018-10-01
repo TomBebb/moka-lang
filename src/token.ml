@@ -11,6 +11,7 @@ type keyword =
   | KImplements
   | KImport
   | KPackage
+  | KSuper
   (* type members *)
   | KVar
   | KVal
@@ -54,6 +55,7 @@ type token =
 let s_keyword = function
   (* type def *)
   | KClass -> "class"
+  | KSuper -> "super"
   | KStruct -> "struct"
   | KInterface -> "interface"
   | KEnum -> "enum"

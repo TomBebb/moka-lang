@@ -39,6 +39,7 @@ type variability = Variable | Constant
 
 type expr_def =
   | EThis
+  | ESuper
   | EConst of const
   | EIdent of string
   | EField of expr * string
@@ -142,6 +143,7 @@ let inner_assign = function
 let rec s_expr tabs (def, _) =
   match def with
   | EThis -> "this"
+  | ESuper -> "super"
   | EConst c -> s_const c
   | EIdent id -> id
   | EField (o, f) -> s_expr tabs o ^ "." ^ f

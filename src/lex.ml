@@ -64,6 +64,7 @@ let rec token buf =
   | "float" -> mk (TKPrim TFloat)
   | "String" -> mk (TKPrim TString)
   | "class" -> mk (TKeyword KClass)
+  | "super" -> mk (TKeyword KSuper)
   | "interface" -> mk (TKeyword KInterface)
   | "struct" -> mk (TKeyword KStruct)
   | "extern" -> mk (TKeyword KExtern)
