@@ -310,6 +310,16 @@ let rec gen_expr ctx (def, pos) =
       Llvm.position_at_end after_bl ctx.gen_builder ;
       ignore (Stack.pop ctx.gen_loops) ;
       cond
+  | TECall (({edef= TESuper; _}, _), args) ->
+      let args = List.map (gen_expr ctx) args in
+      let this_path = get "no path found" ctx.gen_local_path in
+      let meta = Hashtbl.find ctx.gen_typedefs this_path in
+      let super_path, index = get "no super" meta.dsuper in
+      let super_meta = Hashtbl.find ctx.gen_typedefs super_path in
+      let func = Hashtbl.find super_meta.dstatics "new" in
+      let this = get "this" ctx.gen_this in
+      let ptr = build_struct_gep this index "super" ctx.gen_builder in
+      build_call func (Array.of_list ([ptr] @ args)) "" ctx.gen_builder
   | TECall ((def, pos), args) ->
       let args = ref (List.map (gen_expr ctx) args) in
       let func =

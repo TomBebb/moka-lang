@@ -16,6 +16,7 @@ class Main extends Base {
 	static extern func printf(v: String): void
 	var c: int
 	func new() {
+		super(1, 2)
 		c = 4
 	}
 	static func main(): int {
