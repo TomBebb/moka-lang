@@ -15,6 +15,9 @@ type binop =
   | OpDiv
   | OpAssign
   | OpLt
+  | OpLe
+  | OpGt
+  | OpGe
   | OpEq
   | OpAddAssign
   | OpSubAssign
@@ -110,6 +113,9 @@ let s_binop = function
   | OpDiv -> "/"
   | OpAssign -> "="
   | OpLt -> "<"
+  | OpLe -> "<="
+  | OpGt -> ">"
+  | OpGe -> ">="
   | OpEq -> "=="
   | OpAddAssign -> "+="
   | OpSubAssign -> "-="

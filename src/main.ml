@@ -26,10 +26,13 @@ let output = ref "main"
 
 let main_source = ref None
 
+let opt_level = ref 0
+
 let _ =
   let speclist =
     [ ("-v", Arg.Set verbose, "Turns on verbose mode")
     ; ("-o", Arg.Set_string output, "Sets output executable")
+    ; ("-O", Arg.Set_int opt_level, "Set optimization level (0-3)")
     ; ( "-m"
       , Arg.String
           (fun s ->
@@ -62,7 +65,7 @@ let _ =
           print_endline "Generating" ;
           let _ = Codegen.gen_mod gen typed in
           Llvm.dump_module gen.gen_mod ;
-          Codegen.build gen !output )
+          Codegen.build gen !output !opt_level )
     with e ->
       let msg = Printexc.to_string e in
       let stack = Printexc.get_backtrace () in

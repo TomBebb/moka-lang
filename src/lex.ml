@@ -84,7 +84,7 @@ let rec token buf =
   | "while" -> mk (TKeyword KWhile)
   | "for" -> mk (TKeyword KFor)
   | "break" -> mk (TKeyword KBreak)
-  | "contine" -> mk (TKeyword KContinue)
+  | "continue" -> mk (TKeyword KContinue)
   | "this" -> mk (TKeyword KThis)
   | "null" -> mk (TKeyword KNull)
   | int -> mk (TConst (CInt (int_of_string (Sedlexing.Utf8.lexeme buf))))

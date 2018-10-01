@@ -17,6 +17,8 @@ type gen_def_meta =
   ; dstatics: (string, llvalue) Hashtbl.t
   ; dmethods: (string, llvalue) Hashtbl.t }
 
+type gen_loop_meta = {lafter: llbasicblock; lstart: llbasicblock}
+
 type gen_ctx =
   { gen_ctx: llcontext
   ; gen_mod: llmodule
@@ -28,7 +30,8 @@ type gen_ctx =
   ; mutable gen_this_ty: lltype
   ; mutable gen_local_path: path option
   ; gen_typedefs: (path, gen_def_meta) Hashtbl.t
-  ; gen_size_t: lltype }
+  ; gen_size_t: lltype
+  ; gen_loops: gen_loop_meta Stack.t }
 
 let init () =
   Llvm_all_backends.initialize () ;
@@ -55,7 +58,8 @@ let init () =
   ; gen_builder= builder
   ; gen_local_path= None
   ; gen_typedefs= Hashtbl.create 10
-  ; gen_size_t= size_t }
+  ; gen_size_t= size_t
+  ; gen_loops= Stack.create () }
 
 let enter_block ctx = Stack.push (Hashtbl.create 12) ctx.gen_vars
 
@@ -168,6 +172,14 @@ let rec gen_expr ctx (def, pos) =
       let ptr = Llvm.build_alloca (type_of v) name ctx.gen_builder in
       let _ = Llvm.build_store v ptr ctx.gen_builder in
       set_var ctx name ptr ; v
+  | TEUnOp (OpNeg, v) ->
+      let v_val = gen_expr ctx v in
+      let ty = def.ety in
+      (if is_real ty then build_fneg else build_neg)
+        v_val "neg" ctx.gen_builder
+  | TEUnOp (OpNot, v) ->
+      let v_val = gen_expr ctx v in
+      build_not v_val "not" ctx.gen_builder
   | TEBinOp (OpEq, a, b) ->
       let a_val = gen_expr ctx a in
       let b_val = gen_expr ctx b in
@@ -240,6 +252,7 @@ let rec gen_expr ctx (def, pos) =
       let cond_bl = append_block ctx.gen_ctx "cond" ctx.gen_func in
       let inner_bl = append_block ctx.gen_ctx "then" ctx.gen_func in
       let after_bl = append_block ctx.gen_ctx "after" ctx.gen_func in
+      Stack.push {lstart= cond_bl; lafter= after_bl} ctx.gen_loops ;
       ignore (build_br cond_bl ctx.gen_builder) ;
       Llvm.position_at_end cond_bl ctx.gen_builder ;
       let cond = gen_expr ctx cond in
@@ -248,6 +261,7 @@ let rec gen_expr ctx (def, pos) =
       ignore (gen_expr ctx if_e) ;
       ignore (build_br cond_bl ctx.gen_builder) ;
       Llvm.position_at_end after_bl ctx.gen_builder ;
+      ignore (Stack.pop ctx.gen_loops) ;
       cond
   | TECall ((def, pos), args) ->
       let args = ref (List.map (gen_expr ctx) args) in
@@ -279,7 +293,14 @@ let rec gen_expr ctx (def, pos) =
       let args = List.map (gen_expr ctx) args in
       build_call constr (Array.of_list args) "new" ctx.gen_builder
   | TEParen inner -> gen_expr ctx inner
-  | _ -> raise (Failure (s_ty_expr "" (def, pos)))
+  | TEBreak ->
+      let loop = Stack.top ctx.gen_loops in
+      ignore (build_br loop.lafter ctx.gen_builder) ;
+      gen_const ctx (CInt 0)
+  | TEContinue ->
+      let loop = Stack.top ctx.gen_loops in
+      ignore (build_br loop.lstart ctx.gen_builder) ;
+      gen_const ctx (CInt 0)
 
 let pre_gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
@@ -475,17 +496,17 @@ let pre_gen_mod ctx tm =
 
 let gen_mod ctx tm = List.iter (gen_typedef ctx) tm.tmdefs
 
-let optimize ctx =
+let optimize ctx opt_level =
   print_endline "Optimizing" ;
   let pmb = Llvm_passmgr_builder.create () in
-  Llvm_passmgr_builder.set_opt_level 4 pmb ;
-  Llvm_passmgr_builder.use_inliner_with_threshold 3 pmb ;
+  Llvm_passmgr_builder.set_opt_level opt_level pmb ;
+  Llvm_passmgr_builder.use_inliner_with_threshold opt_level pmb ;
   let pm = PassManager.create () in
   Llvm_passmgr_builder.populate_module_pass_manager pm pmb ;
-  assert (PassManager.run_module ctx.gen_mod pm)
+  ignore (PassManager.run_module ctx.gen_mod pm)
 
-let build ctx output_file =
-  optimize ctx ;
+let build ctx output_file opt_level =
+  optimize ctx opt_level ;
   dump_module ctx.gen_mod ;
   let triple = Target.default_triple () in
   let target = Target.by_triple triple in

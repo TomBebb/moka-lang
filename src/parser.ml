@@ -106,6 +106,8 @@ let rec parse_expr tks =
         let body = parse_expr tks in
         let _, last = body in
         mk_pos (EWhile (cond, body)) first_pos last
+    | TKeyword KBreak -> mk_one EBreak first_pos
+    | TKeyword KContinue -> mk_one EContinue first_pos
     | TKeyword ((KVar | KVal) as kind) ->
         let name, _ = expect_ident tks in
         let ty =
