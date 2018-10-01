@@ -62,6 +62,8 @@ type error_kind =
   | Expected of ty * ty
   | CannotCall of ty
   | InvalidLHS
+  | NoMatchingConstr of path * ty list
+  | NoMatchingMeth of path * string * ty list
 
 let error_msg = function
   | UnresolvedIdent s -> sprintf "Failed to resolve identifier '%s'" s
@@ -83,6 +85,13 @@ let error_msg = function
   | InvalidLHS -> "Invalid left-hand side of assignment"
   | CannotAssign ->
       "Cannot assign to this value. Did you mean to put 'var' instead of 'val'?"
+  | NoMatchingConstr (p, ts) ->
+      sprintf "No matching constructor found on '%s' taking args: %s"
+        (s_path p)
+        (String.concat ", " (List.map s_ty ts))
+  | NoMatchingMeth (p, n, ts) ->
+      sprintf "No matching method '%s.%s' taking args: %s" (s_path p) n
+        (String.concat ", " (List.map s_ty ts))
 
 exception Error of error_kind span
 
@@ -152,6 +161,18 @@ let as_path ctx ex =
     let name = pack_arr.(Array.length pack_arr - 1) in
     let pack_arr = Array.sub pack_arr 0 (Array.length pack_arr - 1) in
     Some (Array.to_list pack_arr, name)
+
+let find_matching_constr ctx path args pos =
+  let def, _ = find_or_err ctx.ttypedefs path (Failure "type not found") in
+  let constr =
+    List.find_opt
+      (fun (def, _) ->
+        match def.mkind with
+        | MConstr (params, _) -> List.map (fun p -> p.ptype) params = args
+        | _ -> false )
+      def.emembers
+  in
+  unwrap_or_err constr (Error (NoMatchingConstr (path, args), pos))
 
 let rec type_expr ctx ex =
   let edef, pos = ex in
@@ -249,6 +270,22 @@ let rec type_expr ctx ex =
           exs
       in
       mk (TEBlock exs) !ty
+  | ECall (((ESuper, _) as super), args) ->
+      let this = unwrap_or_err ctx.tthis (Error (UnresolvedThis, pos)) in
+      let this_def, _ =
+        find_or_err ctx.ttypedefs this (Error (UnresolvedThis, pos))
+      in
+      let extends =
+        match this_def.ekind with
+        | EClass def ->
+            unwrap_or_err def.cextends (Error (UnresolvedSuper, pos))
+        | _ -> raise (Error (UnresolvedSuper, pos))
+      in
+      let super = type_expr ctx super in
+      let args = List.map (type_expr ctx) args in
+      let arg_tys = List.map ty_of args in
+      let _ = find_matching_constr ctx extends arg_tys pos in
+      mk (TECall (super, args)) (TPrim TVoid)
   | ECall (func, args) ->
       let func = type_expr ctx func in
       let args = List.map (type_expr ctx) args in
@@ -283,6 +320,8 @@ let rec type_expr ctx ex =
         find_or_err ctx.ttypedefs path (Error (UnresolvedPath path, pos))
       in
       let args = List.map (type_expr ctx) args in
+      let arg_tys = List.map ty_of args in
+      let _ = find_matching_constr ctx path arg_tys pos in
       mk (TENew (path, args)) (TPath path)
   | EBreak | EContinue -> mk TEBreak (TPrim TVoid)
 

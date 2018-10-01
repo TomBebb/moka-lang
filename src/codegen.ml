@@ -179,7 +179,14 @@ let rec gen_expr ctx (def, pos) =
   match def.edef with
   | TEConst c -> gen_const ctx c
   | TEThis -> get "unresolved this" ctx.gen_this
-  | TESuper -> raise (Failure "cannot generate super")
+  | TESuper -> (
+      let this = get "unresolved this" ctx.gen_this in
+      let meta =
+        Hashtbl.find ctx.gen_typedefs (get "no path" ctx.gen_local_path)
+      in
+      match meta.dsuper with
+      | Some (_, ind) -> build_struct_gep this ind "super" ctx.gen_builder
+      | _ -> raise (Failure "no super found") )
   | TEIdent id -> (
       let v = find_var ctx id true in
       match v with
