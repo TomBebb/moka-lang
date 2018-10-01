@@ -83,15 +83,22 @@ let maybe_load ctx name v should_load =
   in
   if should_load && not is_func then build_load v name ctx.gen_builder else v
 
+let rec resolve_pointer ctx ptr =
+  let ptr_ty = type_of ptr in
+  assert (classify_type ptr_ty = TypeKind.Pointer) ;
+  if classify_type (element_type ptr_ty) = TypeKind.Pointer then
+    resolve_pointer ctx (build_load ptr "ptr" ctx.gen_builder)
+  else ptr
+
 let rec find_member ctx obj_path obj_ptr name =
-  assert (classify_type (type_of obj_ptr) = TypeKind.Pointer) ;
+  let ptr = resolve_pointer ctx obj_ptr in
   let meta = Hashtbl.find ctx.gen_typedefs obj_path in
   match Hashtbl.find_opt meta.dfield_indicies name with
-  | Some ind -> Some (build_struct_gep obj_ptr ind name ctx.gen_builder)
+  | Some ind -> Some (build_struct_gep ptr ind name ctx.gen_builder)
   | _ -> (
     match meta.dsuper with
     | Some (s, ind) ->
-        let super_ptr = build_struct_gep obj_ptr ind "super" ctx.gen_builder in
+        let super_ptr = build_struct_gep ptr ind "super" ctx.gen_builder in
         find_member ctx s super_ptr name
     | _ -> None )
 
@@ -123,12 +130,13 @@ let set_var ctx name value = Hashtbl.add (Stack.top ctx.gen_vars) name value
 
 let rec find_method ctx path obj_ptr name =
   let meta = Hashtbl.find ctx.gen_typedefs path in
+  let ptr = resolve_pointer ctx obj_ptr in
   match Hashtbl.find_opt meta.dmethods name with
-  | Some m -> (obj_ptr, m)
+  | Some m -> (ptr, m)
   | None -> (
     match meta.dsuper with
     | Some (s, ind) ->
-        let super = build_struct_gep obj_ptr ind "super" ctx.gen_builder in
+        let super = build_struct_gep ptr ind "super" ctx.gen_builder in
         find_method ctx s super name
     | _ -> raise (Failure "method not found") )
 
@@ -326,7 +334,6 @@ let rec gen_expr ctx (def, pos) =
         match def.edef with
         | TEField (o, f) -> (
             let obj_t = ty_of o in
-            print_endline (s_ty obj_t) ;
             match obj_t with
             | TClass path ->
                 let meta = Hashtbl.find ctx.gen_typedefs path in
@@ -356,7 +363,9 @@ let rec gen_expr ctx (def, pos) =
             build_alloca meta.dstruct ("struct_" ^ s_path path) ctx.gen_builder
         | EClass _ -> gc_malloc ctx meta.dstruct ("class_" ^ s_path path)
       in
-      build_call constr (Array.of_list ([ptr] @ args)) "new" ctx.gen_builder
+      ignore
+        (build_call constr (Array.of_list ([ptr] @ args)) "new" ctx.gen_builder) ;
+      ptr
   | TEParen inner -> gen_expr ctx inner
   | TEBreak ->
       let loop = Stack.top ctx.gen_loops in
@@ -481,11 +490,6 @@ let pre_gen_typedef ctx (meta, _) =
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
           Hashtbl.add statics field.tmname func )
     meta.temembers ;
-  Hashtbl.iter
-    (fun name func ->
-      print_endline (sprintf "%s: %s" name (string_of_lltype (type_of func)))
-      )
-    methods ;
   meta.temembers
 
 let gen_typedef ctx (meta, _) =
@@ -544,7 +548,6 @@ let gen_typedef ctx (meta, _) =
             () ) ;
           ignore (leave_block ctx) ;
           print_endline (sprintf "validating %s" name) ;
-          dump_value func ;
           Llvm_analysis.assert_valid_function func
       | TMConstr (args, body) ->
           let func =

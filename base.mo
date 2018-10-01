@@ -1,9 +1,7 @@
-
 class Base {
 	var a: int
 	var b: int
 	func new(a: int, b: int) {
-
 		this.a = a
 		this.b = b
 	}
@@ -21,9 +19,7 @@ class Main extends Base {
 	}
 	static func main(): int {
 		var m = new Main()
-		m.a = 1
-		m.b = 2
-		printf("Hello, world! %d, %d\n", m.a, m.b)
+		printf("Hello, world! %d, %d, %d\n", m.a, m.b, m.c)
 		m.print()
 		0
 	}

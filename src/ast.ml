@@ -143,27 +143,32 @@ let inner_assign = function
 
 let rec s_expr tabs (def, _) =
   match def with
-  | EThis -> "this"
   | ESuper -> "super"
+  | EThis -> "this"
   | EConst c -> s_const c
   | EIdent id -> id
-  | EField (o, f) -> s_expr tabs o ^ "." ^ f
-  | EBinOp (op, a, b) -> s_expr tabs a ^ s_binop op ^ s_expr tabs b
-  | EUnOp (op, a) -> s_unop op ^ s_expr tabs a
+  | EField (o, f) -> sprintf "%s.%s" (s_expr tabs o) f
+  | EBinOp (op, a, b) ->
+      sprintf "%s %s %s" (s_expr tabs a) (s_binop op) (s_expr tabs b)
+  | EUnOp (op, a) -> sprintf "%s%s" (s_unop op) (s_expr tabs a)
   | EBlock exs ->
-      "{"
-      ^ String.concat ("\n" ^ tabs) (List.map (s_expr (tabs ^ "\t")) exs)
-      ^ "}"
+      sprintf "{%s\n%s}"
+        (String.concat ""
+           (List.map
+              (fun ex -> tabs ^ "\t" ^ s_expr (tabs ^ "\t") ex ^ "\n")
+              exs))
+        tabs
   | ECall (f, exs) ->
-      s_expr tabs f ^ "("
-      ^ String.concat "," (List.map (s_expr tabs) exs)
-      ^ ")"
-  | EParen ex -> "(" ^ s_expr tabs ex ^ ")"
-  | EIf (cond, if_e, None) -> "if " ^ s_expr tabs cond ^ " " ^ s_expr tabs if_e
+      sprintf "%s(%s)" (s_expr tabs f)
+        (String.concat "," (List.map (s_expr tabs) exs))
+  | EParen ex -> sprintf "(%s)" (s_expr tabs ex)
+  | EIf (cond, if_e, None) ->
+      sprintf "if %s %s" (s_expr tabs cond) (s_expr tabs if_e)
   | EIf (cond, if_e, Some else_e) ->
-      "if " ^ s_expr tabs cond ^ " " ^ s_expr tabs if_e ^ " else "
-      ^ s_expr tabs else_e
-  | EWhile (cond, body) -> "while " ^ s_expr tabs cond ^ " " ^ s_expr tabs body
+      sprintf "if %s %s else %s" (s_expr tabs cond) (s_expr tabs if_e)
+        (s_expr tabs else_e)
+  | EWhile (cond, body) ->
+      sprintf "while %s %s" (s_expr tabs cond) (s_expr tabs body)
   | EVar (v, None, name, ex) ->
       sprintf "%s %s = %s" (s_variability v) name (s_expr tabs ex)
   | EVar (v, Some t, name, ex) ->
@@ -174,4 +179,4 @@ let rec s_expr tabs (def, _) =
   | EBreak -> "break"
   | EContinue -> "continue"
   | EReturn None -> "return"
-  | EReturn (Some v) -> "return " ^ s_expr tabs v
+  | EReturn (Some v) -> sprintf "return %s" (s_expr tabs v)

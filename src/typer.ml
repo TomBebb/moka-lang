@@ -429,34 +429,37 @@ let rec s_ty_expr tabs (meta, _) =
   | TEThis -> "this"
   | TEConst c -> s_const c
   | TEIdent id -> id
-  | TEField (o, f) -> s_ty_expr tabs o ^ "." ^ f
-  | TEBinOp (op, a, b) -> s_ty_expr tabs a ^ s_binop op ^ s_ty_expr tabs b
-  | TEUnOp (op, a) -> s_unop op ^ s_ty_expr tabs a
+  | TEField (o, f) -> sprintf "%s.%s" (s_ty_expr tabs o) f
+  | TEBinOp (op, a, b) ->
+      sprintf "%s %s %s" (s_ty_expr tabs a) (s_binop op) (s_ty_expr tabs b)
+  | TEUnOp (op, a) -> sprintf "%s%s" (s_unop op) (s_ty_expr tabs a)
   | TEBlock exs ->
-      "{"
-      ^ String.concat ("\n" ^ tabs) (List.map (s_ty_expr (tabs ^ "\t")) exs)
-      ^ "}"
+      sprintf "{%s\n%s}"
+        (String.concat ""
+           (List.map
+              (fun ex -> tabs ^ "\t" ^ s_ty_expr (tabs ^ "\t") ex ^ "\n")
+              exs))
+        tabs
   | TECall (f, exs) ->
-      s_ty_expr tabs f ^ "("
-      ^ String.concat "," (List.map (s_ty_expr tabs) exs)
-      ^ ")"
-  | TEParen ex -> "(" ^ s_ty_expr tabs ex ^ ")"
+      sprintf "%s(%s)" (s_ty_expr tabs f)
+        (String.concat "," (List.map (s_ty_expr tabs) exs))
+  | TEParen ex -> sprintf "(%s)" (s_ty_expr tabs ex)
   | TEIf (cond, if_e, None) ->
-      "if " ^ s_ty_expr tabs cond ^ " " ^ s_ty_expr tabs if_e
+      sprintf "if %s %s" (s_ty_expr tabs cond) (s_ty_expr tabs if_e)
   | TEIf (cond, if_e, Some else_e) ->
-      "if " ^ s_ty_expr tabs cond ^ " " ^ s_ty_expr tabs if_e ^ " else "
-      ^ s_ty_expr tabs else_e
+      sprintf "if %s %s else %s" (s_ty_expr tabs cond) (s_ty_expr tabs if_e)
+        (s_ty_expr tabs else_e)
   | TEWhile (cond, body) ->
-      "while " ^ s_ty_expr tabs cond ^ " " ^ s_ty_expr tabs body
+      sprintf "while %s %s" (s_ty_expr tabs cond) (s_ty_expr tabs body)
   | TEVar (v, None, name, ex) ->
-      Printf.sprintf "%s %s = %s" (s_variability v) name (s_ty_expr tabs ex)
+      sprintf "%s %s = %s" (s_variability v) name (s_ty_expr tabs ex)
   | TEVar (v, Some t, name, ex) ->
-      Printf.sprintf "%s %s: %s = %s" (s_variability v) name (s_ty t)
+      sprintf "%s %s: %s = %s" (s_variability v) name (s_ty t)
         (s_ty_expr tabs ex)
   | TENew (path, args) ->
-      Printf.sprintf "new %s(%s)" (s_path path)
+      sprintf "new %s(%s)" (s_path path)
         (String.concat "," (List.map (s_ty_expr tabs) args))
   | TEBreak -> "break"
   | TEContinue -> "continue"
   | TEReturn None -> "return"
-  | TEReturn (Some v) -> "return " ^ s_ty_expr tabs v
+  | TEReturn (Some v) -> sprintf "return %s" (s_ty_expr tabs v)
