@@ -14,6 +14,7 @@ type binop =
   | OpMul
   | OpDiv
   | OpAssign
+  | OpLt
   | OpEq
   | OpAddAssign
   | OpSubAssign
@@ -46,6 +47,8 @@ type expr_def =
   | EWhile of expr * expr
   | EVar of variability * ty option * string * expr
   | ENew of path * expr list
+  | EBreak
+  | EContinue
 
 and expr = expr_def span
 
@@ -106,6 +109,7 @@ let s_binop = function
   | OpMul -> "*"
   | OpDiv -> "/"
   | OpAssign -> "="
+  | OpLt -> "<"
   | OpEq -> "=="
   | OpAddAssign -> "+="
   | OpSubAssign -> "-="
@@ -156,3 +160,5 @@ let rec s_expr tabs (def, _) =
   | ENew (path, args) ->
       sprintf "new %s(%s)" (s_path path)
         (String.concat "," (List.map (s_expr tabs) args))
+  | EBreak -> "break"
+  | EContinue -> "continue"

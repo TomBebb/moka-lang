@@ -101,6 +101,11 @@ let rec parse_expr tks =
         let args = parse_exprs tks TCloseParen (Some TComma) in
         let last = expect tks [TCloseParen] "constructor call" in
         mk_pos (ENew (path, args)) first_pos last
+    | TKeyword KWhile ->
+        let cond = parse_expr tks in
+        let body = parse_expr tks in
+        let _, last = body in
+        mk_pos (EWhile (cond, body)) first_pos last
     | TKeyword ((KVar | KVal) as kind) ->
         let name, _ = expect_ident tks in
         let ty =

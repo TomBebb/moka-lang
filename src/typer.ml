@@ -16,6 +16,8 @@ type ty_expr_def =
   | TEWhile of ty_expr * ty_expr
   | TEVar of variability * ty option * string * ty_expr
   | TENew of path * ty_expr list
+  | TEBreak
+  | TEContinue
 
 and ty_expr_meta = {edef: ty_expr_def; ety: ty}
 
@@ -200,7 +202,7 @@ let rec type_expr ctx ex =
         | OpAdd | OpSub | OpDiv | OpMul ->
             if is_numeric a_ty && is_numeric b_ty && a_ty = b_ty then Some a_ty
             else None
-        | OpEq -> if a_ty = b_ty then Some (TPrim TBool) else None
+        | OpEq | OpLt -> if a_ty = b_ty then Some (TPrim TBool) else None
         | _ when is_assign op ->
             let lhs = type_expr_lhs ctx a_e in
             assert (ty_of lhs = a_ty) ;
@@ -259,6 +261,7 @@ let rec type_expr ctx ex =
       in
       let args = List.map (type_expr ctx) args in
       mk (TENew (path, args)) (TPath path)
+  | EBreak | EContinue -> mk TEBreak (TPrim TVoid)
 
 and type_of_member ctx (def, pos) =
   match def.mkind with
@@ -382,3 +385,5 @@ let rec s_ty_expr tabs (meta, _) =
   | TENew (path, args) ->
       Printf.sprintf "new %s(%s)" (s_path path)
         (String.concat "," (List.map (s_ty_expr tabs) args))
+  | TEBreak -> "break"
+  | TEContinue -> "continue"

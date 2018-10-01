@@ -172,6 +172,10 @@ let rec gen_expr ctx (def, pos) =
       let a_val = gen_expr ctx a in
       let b_val = gen_expr ctx b in
       build_icmp Llvm.Icmp.Eq a_val b_val "eq" ctx.gen_builder
+  | TEBinOp (OpLt, a, b) ->
+      let a_val = gen_expr ctx a in
+      let b_val = gen_expr ctx b in
+      build_icmp Llvm.Icmp.Slt a_val b_val "eq" ctx.gen_builder
   | TEBinOp (OpAssign, a, b) ->
       let a_ref = gen_expr_lhs ctx a in
       let b_val = gen_expr ctx b in
@@ -232,6 +236,19 @@ let rec gen_expr ctx (def, pos) =
       let _ = build_br after_bl ctx.gen_builder in
       Llvm.position_at_end after_bl ctx.gen_builder ;
       cond
+  | TEWhile (cond, if_e) ->
+      let cond_bl = append_block ctx.gen_ctx "cond" ctx.gen_func in
+      let inner_bl = append_block ctx.gen_ctx "then" ctx.gen_func in
+      let after_bl = append_block ctx.gen_ctx "after" ctx.gen_func in
+      ignore (build_br cond_bl ctx.gen_builder) ;
+      Llvm.position_at_end cond_bl ctx.gen_builder ;
+      let cond = gen_expr ctx cond in
+      ignore (build_cond_br cond inner_bl after_bl ctx.gen_builder) ;
+      Llvm.position_at_end inner_bl ctx.gen_builder ;
+      ignore (gen_expr ctx if_e) ;
+      ignore (build_br cond_bl ctx.gen_builder) ;
+      Llvm.position_at_end after_bl ctx.gen_builder ;
+      cond
   | TECall ((def, pos), args) ->
       let args = ref (List.map (gen_expr ctx) args) in
       let func =
@@ -253,7 +270,8 @@ let rec gen_expr ctx (def, pos) =
       let res =
         build_call func (Array.of_list !args) "func_res" ctx.gen_builder
       in
-      if classify_type (type_of res) = TypeKind.Void then gen_const ctx CNull
+      if classify_type (type_of res) = TypeKind.Void then
+        gen_const ctx (CInt 0)
       else res
   | TENew (path, args) ->
       let meta = Hashtbl.find ctx.gen_typedefs path in

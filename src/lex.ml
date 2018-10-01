@@ -107,6 +107,7 @@ let rec token buf =
   | '-' -> mk (TBinOp OpSub)
   | '*' -> mk (TBinOp OpMul)
   | '/' -> mk (TBinOp OpDiv)
+  | '<' -> mk (TBinOp OpLt)
   | '!' -> mk (TUnOp OpNot)
   | "==" -> mk (TBinOp OpEq)
   | '=' -> mk (TBinOp OpAssign)
