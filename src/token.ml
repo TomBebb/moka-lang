@@ -29,6 +29,7 @@ type keyword =
   | KFor
   | KBreak
   | KContinue
+  | KReturn
   (* special *)
   | KThis
   | KNull
@@ -50,6 +51,7 @@ type token =
   | TOpenBrace
   | TCloseBrace
   | TAt
+  | TSemicolon
   | TEof
 
 let s_keyword = function
@@ -80,6 +82,7 @@ let s_keyword = function
   | KFor -> "for"
   | KBreak -> "break"
   | KContinue -> "continue"
+  | KReturn -> "return"
   (* special *)
   | KThis -> "this"
   | KNull -> "null"
@@ -100,6 +103,7 @@ let s_token_def = function
   | TKPrim p -> s_primitive_ty p
   | TBinOp op -> s_binop op
   | TUnOp op -> s_unop op
+  | TSemicolon -> ";"
   | TAt -> "@"
   | TEof -> "<end of file>"
 

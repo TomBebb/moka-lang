@@ -111,19 +111,24 @@ let find_var ctx name should_load =
   let this = get "no this" ctx.gen_this in
   ( if !res = None then
     let mem = find_member ctx local_path this name in
-    res := Some (maybe_load ctx name (get "member not found" mem) should_load)
-  ) ;
+    res :=
+      Some
+        (maybe_load ctx name
+           (get ("member '" ^ name ^ "' not found") mem)
+           should_load) ) ;
   !res
 
 let set_var ctx name value = Hashtbl.add (Stack.top ctx.gen_vars) name value
 
-let rec find_method ctx path name =
+let rec find_method ctx path obj_ptr name =
   let meta = Hashtbl.find ctx.gen_typedefs path in
   match Hashtbl.find_opt meta.dmethods name with
-  | Some m -> m
+  | Some m -> (obj_ptr, m)
   | None -> (
     match meta.dsuper with
-    | Some (s, _) -> find_method ctx s name
+    | Some (s, ind) ->
+        let super = build_struct_gep obj_ptr ind "super" ctx.gen_builder in
+        find_method ctx s super name
     | _ -> raise (Failure "method not found") )
 
 let rec gen_ty ctx ty =
@@ -302,13 +307,15 @@ let rec gen_expr ctx (def, pos) =
         match def.edef with
         | TEField (o, f) -> (
             let obj_t = ty_of o in
+            print_endline (s_ty obj_t) ;
             match obj_t with
             | TClass path ->
                 let meta = Hashtbl.find ctx.gen_typedefs path in
                 Hashtbl.find meta.dstatics f
             | TPath path ->
-                let meth = find_method ctx path f in
-                args := [get "this" ctx.gen_this] @ !args ;
+                let obj = gen_expr_lhs ctx o in
+                let ptr, meth = find_method ctx path obj f in
+                args := [ptr] @ !args ;
                 meth
             | _ -> raise (Failure (sprintf "no path for %s" (s_ty obj_t))) )
         | _ -> gen_expr ctx (def, pos)
@@ -334,6 +341,10 @@ let rec gen_expr ctx (def, pos) =
       let loop = Stack.top ctx.gen_loops in
       ignore (build_br loop.lstart ctx.gen_builder) ;
       gen_const ctx (CInt 0)
+  | TEReturn None -> build_ret_void ctx.gen_builder
+  | TEReturn (Some v) ->
+      let v = gen_expr ctx v in
+      build_ret v ctx.gen_builder
 
 let pre_gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in

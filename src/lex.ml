@@ -86,6 +86,7 @@ let rec token buf =
   | "for" -> mk (TKeyword KFor)
   | "break" -> mk (TKeyword KBreak)
   | "continue" -> mk (TKeyword KContinue)
+  | "return" -> mk (TKeyword KReturn)
   | "this" -> mk (TKeyword KThis)
   | "null" -> mk (TKeyword KNull)
   | "true" -> mk (TConst (CBool true))
@@ -101,6 +102,7 @@ let rec token buf =
   | ']' -> mk TCloseBracket
   | '{' -> mk TOpenBrace
   | '}' -> mk TCloseBrace
+  | ';' -> mk TSemicolon
   | '@' -> mk TAt
   | "+=" -> mk (TBinOp OpAddAssign)
   | "-=" -> mk (TBinOp OpSubAssign)

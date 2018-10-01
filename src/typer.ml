@@ -19,6 +19,7 @@ type ty_expr_def =
   | TENew of path * ty_expr list
   | TEBreak
   | TEContinue
+  | TEReturn of ty_expr option
 
 and ty_expr_meta = {edef: ty_expr_def; ety: ty}
 
@@ -64,6 +65,7 @@ type error_kind =
   | InvalidLHS
   | NoMatchingConstr of path * ty list
   | NoMatchingMeth of path * string * ty list
+  | NoReturn
 
 let error_msg = function
   | UnresolvedIdent s -> sprintf "Failed to resolve identifier '%s'" s
@@ -92,6 +94,7 @@ let error_msg = function
   | NoMatchingMeth (p, n, ts) ->
       sprintf "No matching method '%s.%s' taking args: %s" (s_path p) n
         (String.concat ", " (List.map s_ty ts))
+  | NoReturn -> "No return"
 
 exception Error of error_kind span
 
@@ -100,14 +103,16 @@ type type_context =
   ; ttypedefs: (path, Ast.type_def) Hashtbl.t
   ; mutable tthis: path option
   ; mutable tin_static: bool
-  ; mutable tin_constructor: bool }
+  ; mutable tin_constructor: bool
+  ; mutable thas_return: bool }
 
 let init () =
   { tvars= Stack.create ()
   ; ttypedefs= Hashtbl.create 2
   ; tthis= None
   ; tin_static= true
-  ; tin_constructor= false }
+  ; tin_constructor= false
+  ; thas_return= false }
 
 let unwrap_or_err o err = match o with Some v -> v | None -> raise err
 
@@ -324,6 +329,10 @@ let rec type_expr ctx ex =
       let _ = find_matching_constr ctx path arg_tys pos in
       mk (TENew (path, args)) (TPath path)
   | EBreak | EContinue -> mk TEBreak (TPrim TVoid)
+  | EReturn v ->
+      ctx.thas_return <- true ;
+      let v = match v with Some v -> Some (type_expr ctx v) | None -> None in
+      mk (TEReturn v) (TPrim TVoid)
 
 and type_of_member ctx (def, pos) =
   match def.mkind with
@@ -363,6 +372,8 @@ and type_of_const = function
 
 let type_member ctx (def, pos) =
   ctx.tin_static <- MemberMods.mem MStatic def.mmods ;
+  ctx.tin_constructor <- false ;
+  ctx.thas_return <- false ;
   let kind =
     match def.mkind with
     | MVar (v, Some ty, None) -> TMVar (v, ty, None)
@@ -375,6 +386,8 @@ let type_member ctx (def, pos) =
         let _ = enter_block ctx in
         List.iter (fun par -> set_var ctx par.pname Constant par.ptype) params ;
         let body = type_expr ctx body in
+        if ty_of body <> ret && not ctx.thas_return then
+          raise (Error (NoReturn, pos)) ;
         let _ = leave_block ctx in
         TMFunc (params, ret, body)
     | MConstr (params, body) ->
@@ -445,3 +458,5 @@ let rec s_ty_expr tabs (meta, _) =
         (String.concat "," (List.map (s_ty_expr tabs) args))
   | TEBreak -> "break"
   | TEContinue -> "continue"
+  | TEReturn None -> "return"
+  | TEReturn (Some v) -> "return " ^ s_ty_expr tabs v

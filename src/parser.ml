@@ -100,6 +100,14 @@ let rec parse_expr tks =
         mk_pos (EUnOp (op, inner)) first_pos last
     | TKeyword KThis -> mk_one EThis first_pos
     | TKeyword KSuper -> mk_one ESuper first_pos
+    | TKeyword KReturn ->
+        let inner =
+          if next_is tks TSemicolon then (
+            ignore (Stream.next tks) ;
+            None )
+          else Some (parse_expr tks)
+        in
+        mk_one (EReturn inner) first_pos
     | TKeyword KNew ->
         let path = parse_path tks in
         ignore (expect tks [TOpenParen] "constructor call") ;

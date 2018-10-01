@@ -52,6 +52,7 @@ type expr_def =
   | EWhile of expr * expr
   | EVar of variability * ty option * string * expr
   | ENew of path * expr list
+  | EReturn of expr option
   | EBreak
   | EContinue
 
@@ -172,3 +173,5 @@ let rec s_expr tabs (def, _) =
         (String.concat "," (List.map (s_expr tabs) args))
   | EBreak -> "break"
   | EContinue -> "continue"
+  | EReturn None -> "return"
+  | EReturn (Some v) -> "return " ^ s_expr tabs v
