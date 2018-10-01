@@ -57,7 +57,7 @@ type error_kind =
   | UnresolvedFieldType of string
   | CannotAssign
   | UnresolvedThis
-  | Expected of ty
+  | Expected of ty * ty
   | CannotCall of ty
   | InvalidLHS
 
@@ -74,7 +74,8 @@ let error_msg = function
       sprintf "Type %s is not a struct or class, so has no fields" (s_ty t)
   | UnresolvedFieldType name ->
       sprintf "Type of field '%s' could not be resolved" name
-  | Expected t -> sprintf "Expected type %s" (s_ty t)
+  | Expected (t, got) ->
+      sprintf "Expected type %s, got type %s" (s_ty t) (s_ty got)
   | CannotCall t -> sprintf "The type %s cannot be called" (s_ty t)
   | InvalidLHS -> "Invalid left-hand side of assignment"
   | CannotAssign ->
@@ -236,22 +237,22 @@ let rec type_expr ctx ex =
       let cond = type_expr ctx cond in
       let if_e = type_expr ctx if_e in
       let _, pos = cond in
-      if ty_of cond != TPrim TBool then
-        raise (Error (Expected (TPrim TBool), pos)) ;
+      if ty_of cond <> TPrim TBool then
+        raise (Error (Expected (TPrim TBool, ty_of cond), pos)) ;
       mk (TEIf (cond, if_e, None)) (ty_of if_e)
   | EIf (cond, if_e, Some else_e) ->
       let cond = type_expr ctx cond in
       let if_e = type_expr ctx if_e in
       let else_e = type_expr ctx else_e in
       let _, pos = cond in
-      if ty_of cond != TPrim TBool then
-        raise (Error (Expected (TPrim TBool), pos)) ;
+      if ty_of cond <> TPrim TBool then
+        raise (Error (Expected (TPrim TBool, ty_of cond), pos)) ;
       mk (TEIf (cond, if_e, Some else_e)) (ty_of if_e)
   | EWhile (cond, body) ->
       let cond = type_expr ctx cond in
       let body = type_expr ctx body in
-      if ty_of cond != TPrim TBool then
-        raise (Error (Expected (TPrim TBool), pos)) ;
+      if ty_of cond <> TPrim TBool then
+        raise (Error (Expected (TPrim TBool, ty_of cond), pos)) ;
       mk (TEWhile (cond, body)) (TPrim TVoid)
   | ENew (path, args) ->
       let _ =
@@ -277,7 +278,7 @@ and find_var ctx name =
   let res : (variability * ty) option ref = ref None in
   Stack.iter
     (fun tbl ->
-      if !res != None then ()
+      if !res <> None then ()
       else
         match Hashtbl.find_opt tbl name with
         | Some v -> res := Some v

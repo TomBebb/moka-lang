@@ -187,7 +187,7 @@ let rec gen_expr ctx (def, pos) =
   | TEBinOp (OpLt, a, b) ->
       let a_val = gen_expr ctx a in
       let b_val = gen_expr ctx b in
-      build_icmp Llvm.Icmp.Slt a_val b_val "eq" ctx.gen_builder
+      build_icmp Llvm.Icmp.Slt a_val b_val "lt" ctx.gen_builder
   | TEBinOp (OpAssign, a, b) ->
       let a_ref = gen_expr_lhs ctx a in
       let b_val = gen_expr ctx b in
@@ -226,18 +226,19 @@ let rec gen_expr ctx (def, pos) =
       let then_bl = append_block ctx.gen_ctx "then" ctx.gen_func in
       let else_bl = append_block ctx.gen_ctx "else" ctx.gen_func in
       let after_bl = append_block ctx.gen_ctx "after" ctx.gen_func in
-      let ptr =
-        build_alloca (gen_ty ctx (ty_of if_e)) "ifval" ctx.gen_builder
-      in
       let _ = build_cond_br cond then_bl else_bl ctx.gen_builder in
       Llvm.position_at_end then_bl ctx.gen_builder ;
-      let _ = build_store (gen_expr ctx if_e) ptr ctx.gen_builder in
+      let if_val = gen_expr ctx if_e in
+      let new_then_bl = insertion_block ctx.gen_builder in
       let _ = build_br after_bl ctx.gen_builder in
       Llvm.position_at_end else_bl ctx.gen_builder ;
-      let _ = build_store (gen_expr ctx else_e) ptr ctx.gen_builder in
+      let else_val = gen_expr ctx else_e in
+      let new_else_bl = insertion_block ctx.gen_builder in
       let _ = build_br after_bl ctx.gen_builder in
       Llvm.position_at_end after_bl ctx.gen_builder ;
-      build_load ptr "ifval" ctx.gen_builder
+      build_phi
+        [(if_val, new_then_bl); (else_val, new_else_bl)]
+        "if" ctx.gen_builder
   | TEIf (cond, if_e, None) ->
       let cond = gen_expr ctx cond in
       let then_bl = append_block ctx.gen_ctx "then" ctx.gen_func in

@@ -157,7 +157,7 @@ let rec parse_expr tks =
         let args = parse_exprs tks TCloseParen (Some TComma) in
         let last = expect tks [TCloseParen] "function call" in
         let _, first = base in
-        mk_pos (ECall (base, args)) first last
+        parse_after_expr (mk_pos (ECall (base, args)) first last) tks
     | Some (TBinOp op, _) ->
         let _ = Stream.next tks in
         let other = parse_expr tks in
