@@ -184,6 +184,10 @@ let rec gen_expr ctx (def, pos) =
       let a_val = gen_expr ctx a in
       let b_val = gen_expr ctx b in
       build_icmp Llvm.Icmp.Eq a_val b_val "eq" ctx.gen_builder
+  | TEBinOp (OpNEq, a, b) ->
+      let a_val = gen_expr ctx a in
+      let b_val = gen_expr ctx b in
+      build_icmp Llvm.Icmp.Ne a_val b_val "neq" ctx.gen_builder
   | TEBinOp (OpLt, a, b) ->
       let a_val = gen_expr ctx a in
       let b_val = gen_expr ctx b in
@@ -282,12 +286,13 @@ let rec gen_expr ctx (def, pos) =
             | _ -> raise (Failure (sprintf "no path for %s" (s_ty obj_t))) )
         | _ -> gen_expr ctx (def, pos)
       in
-      let res =
-        build_call func (Array.of_list !args) "func_res" ctx.gen_builder
+      let is_void =
+        classify_type (return_type (element_type (type_of func)))
+        = TypeKind.Void
       in
-      if classify_type (type_of res) = TypeKind.Void then
-        gen_const ctx (CInt 0)
-      else res
+      build_call func (Array.of_list !args)
+        (if is_void then "" else "func_res")
+        ctx.gen_builder
   | TENew (path, args) ->
       let meta = Hashtbl.find ctx.gen_typedefs path in
       let constr = Hashtbl.find meta.dstatics "new" in

@@ -94,6 +94,10 @@ let rec parse_expr tks =
     match first with
     | TIdent id -> mk_one (EIdent id) first_pos
     | TConst c -> mk_one (EConst c) first_pos
+    | TUnOp op ->
+        let inner = parse_expr tks in
+        let _, last = inner in
+        mk_pos (EUnOp (op, inner)) first_pos last
     | TKeyword KThis -> mk_one EThis first_pos
     | TKeyword KNew ->
         let path = parse_path tks in

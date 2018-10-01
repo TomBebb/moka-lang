@@ -19,6 +19,7 @@ type binop =
   | OpGt
   | OpGe
   | OpEq
+  | OpNEq
   | OpAddAssign
   | OpSubAssign
   | OpMulAssign
@@ -117,6 +118,7 @@ let s_binop = function
   | OpGt -> ">"
   | OpGe -> ">="
   | OpEq -> "=="
+  | OpNEq -> "!="
   | OpAddAssign -> "+="
   | OpSubAssign -> "-="
   | OpMulAssign -> "*="

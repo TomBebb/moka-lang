@@ -87,6 +87,8 @@ let rec token buf =
   | "continue" -> mk (TKeyword KContinue)
   | "this" -> mk (TKeyword KThis)
   | "null" -> mk (TKeyword KNull)
+  | "true" -> mk (TConst (CBool true))
+  | "false" -> mk (TConst (CBool false))
   | int -> mk (TConst (CInt (int_of_string (Sedlexing.Utf8.lexeme buf))))
   | float -> mk (TConst (CFloat (float_of_string (Sedlexing.Utf8.lexeme buf))))
   | '.' -> mk TDot
@@ -110,6 +112,7 @@ let rec token buf =
   | '<' -> mk (TBinOp OpLt)
   | '!' -> mk (TUnOp OpNot)
   | "==" -> mk (TBinOp OpEq)
+  | "!=" -> mk (TBinOp OpNEq)
   | '=' -> mk (TBinOp OpAssign)
   | '"' ->
       let strbuf = Buffer.create 1 in
