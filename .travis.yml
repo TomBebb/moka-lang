@@ -1,8 +1,20 @@
 language: generic
 dist: trusty
-before_script:
-  - echo "deb http://apt.llvm.org/trusty/ llvm-toolchain-trusty-7 main" | sudo tee -a /etc/apt/sources.list
-  - sudo apt-get update -qq
+sudo: required
+
+before_install:
+  - sudo apt-get update
+
+  # Ensure add-apt-repository is installed.
+  - sudo apt-get install python-software-properties
+
+  # LLVM
+  - sudo sh -c "echo 'deb http://apt.llvm.org/trusty/ llvm-toolchain-trusty-7 main' >> /etc/apt/sources.list"
+  - wget -O - http://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+
+  - sudo add-apt-repository --yes ppa:ubuntu-toolchain-r/test
+install:
+  - sudo apt-get update
   - sudo apt-get install -y llvm-7-dev libllvm7 libstdc++6
   - sh <(curl -sL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh)
   - opam init
