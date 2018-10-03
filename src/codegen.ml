@@ -180,6 +180,26 @@ let gc_malloc ctx ty name =
   let ptr = build_call func (Array.of_list [size]) "ptr" ctx.gen_builder in
   build_pointercast ptr (pointer_type ty) name ctx.gen_builder
 
+let rec gen_defaults ctx ptr meta =
+  let ptr =
+    match meta.dkind with
+    | EStruct ->
+        build_alloca meta.dstruct ("struct_" ^ s_path path) ctx.gen_builder
+    | EClass _ -> gc_malloc ctx meta.dstruct ("class_" ^ s_path path)
+  in
+  Hashtbl.iter_keys meta.dfield_defaults ~f:(fun name ->
+      let con = Hashtbl.find_exn meta.dfield_defaults name in
+      let ind = Hashtbl.find_exn meta.dfield_indicies name in
+      let field_ptr = build_struct_gep ptr ind name ctx.gen_builder in
+      ignore (build_store con field_ptr ctx.gen_builder) ) ;
+  let _ = match meta.dsuper with
+  |Some (path, ind) ->
+    let super_ptr = build_struct_gep ptr ind "super" ctx.gen_builder in
+    let super_meta = Hashtbl.find_exn ctx.gen_typedefs path in
+    gen_defaults ctx super_ptr super_meta
+  in 
+  ()
+
 let rec gen_expr ctx (def, pos) =
   let rec gen_expr_lhs ctx (def, pos) =
     match def.edef with
@@ -363,11 +383,7 @@ let rec gen_expr ctx (def, pos) =
             build_alloca meta.dstruct ("struct_" ^ s_path path) ctx.gen_builder
         | EClass _ -> gc_malloc ctx meta.dstruct ("class_" ^ s_path path)
       in
-      Hashtbl.iter_keys meta.dfield_defaults ~f:(fun name ->
-          let con = Hashtbl.find_exn meta.dfield_defaults name in
-          let ind = Hashtbl.find_exn meta.dfield_indicies name in
-          let field_ptr = build_struct_gep ptr ind name ctx.gen_builder in
-          ignore (build_store con field_ptr ctx.gen_builder) ) ;
+      gen_defaults ptr meta;
       ignore
         (build_call constr (Array.of_list ([ptr] @ args)) "new" ctx.gen_builder) ;
       ptr
