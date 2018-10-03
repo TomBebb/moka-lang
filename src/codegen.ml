@@ -44,11 +44,9 @@ let init () =
   let builder = builder ctx in
   let size_t_size = Ctypes.sizeof Ctypes.size_t in
   let size_t = integer_type ctx (size_t_size * 8) in
-  let malloc_sig =
-    function_type (pointer_type (i8_type ctx)) (Array.of_list [size_t])
-  in
+  let malloc_sig = function_type (pointer_type (i8_type ctx)) [|size_t|] in
   ignore (declare_function "GC_malloc" malloc_sig main_mod) ;
-  let sig_ty = function_type (i32_type ctx) (Array.of_list []) in
+  let sig_ty = function_type (i32_type ctx) [||] in
   let main_func = declare_function "main" sig_ty main_mod in
   let entry = append_block ctx "entry" main_func in
   position_at_end entry builder ;
@@ -382,9 +380,8 @@ let rec gen_expr ctx (def, pos) =
 
 let pre_gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
-  let types : lltype list ref = ref [] in
+  let types = Bag.create () in
   let indices = String.Table.create () in
-  let push ty = types := !types @ [ty] in
   let statics = String.Table.create () in
   let methods = String.Table.create () in
   ctx.gen_local_path <- Some meta.tepath ;
@@ -396,8 +393,8 @@ let pre_gen_typedef ctx (meta, _) =
       | TMVar (_, ty, _) when not is_static ->
           let llty = gen_ty ctx ty in
           ignore
-            (Hashtbl.add indices ~key:field.tmname ~data:(List.length !types)) ;
-          push llty
+            (Hashtbl.add indices ~key:field.tmname ~data:(Bag.length types)) ;
+          ignore (Bag.add types llty)
       | _ -> () )
     meta.temembers ;
   ignore
@@ -408,12 +405,12 @@ let pre_gen_typedef ctx (meta, _) =
           | Some path ->
               let super = Hashtbl.find_exn ctx.gen_typedefs path in
               let super_ty = super.dstruct in
-              types := !types @ [super_ty] ;
-              Some (path, List.length !types - 1)
+              ignore (Bag.add types super_ty) ;
+              Some (path, Bag.length types - 1)
           | _ -> None
         in
         let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
-        struct_set_body gen (Array.of_list !types) false ;
+        struct_set_body gen (Bag.to_array types) false ;
         let dmeta =
           { dstruct= gen
           ; dfield_indicies= indices
@@ -426,7 +423,7 @@ let pre_gen_typedef ctx (meta, _) =
         Hashtbl.add ctx.gen_typedefs ~key:meta.tepath ~data:dmeta
     | EStruct ->
         let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
-        struct_set_body gen (Array.of_list !types) false ;
+        struct_set_body gen (Bag.to_array types) false ;
         let dmeta =
           { dstruct= gen
           ; dfield_indicies= indices

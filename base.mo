@@ -1,6 +1,6 @@
 class Base {
-	var a: int
-	var b: int
+	var a: int = 0
+	var b: int = 0
 	func new(a: int, b: int) {
 		this.a = a
 		this.b = b
