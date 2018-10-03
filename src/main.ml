@@ -63,9 +63,9 @@ let _ =
           let typed = Typer.type_mod typer mod_def in
           print_endline "Pre Generating" ;
           let _ = Codegen.pre_gen_mod gen typed in
+          Llvm.dump_module gen.gen_mod ;
           print_endline "Generating" ;
           let _ = Codegen.gen_mod gen typed in
-          Llvm.dump_module gen.gen_mod ;
           Codegen.build gen !output !opt_level )
     with e ->
       Printf.eprintf "error: %s\n" (Exn.to_string e) ;

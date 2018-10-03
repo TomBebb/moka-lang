@@ -1,9 +1,7 @@
 class Base {
-	var a: int = 0
-	var b: int = 0
-	func new(a: int, b: int) {
-		this.a = a
-		this.b = b
+	var a: int = 12
+	var b: int = 13
+	func new() {
 	}
 	func print() {
 		Main.printf("a: %d, b: %d\n", a, b)
@@ -12,10 +10,9 @@ class Base {
 class Main extends Base {
 	@LinkName("printf") @CallConv("vararg")	
 	static extern func printf(v: String): void
-	var c: int
+	var c: int = 4
 	func new() {
-		super(1, 2)
-		c = 4
+		super()
 	}
 	static func main(): int {
 		var m = new Main()

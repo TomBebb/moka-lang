@@ -19,7 +19,8 @@ type gen_def_meta =
   ; dstatics: (string, llvalue) Hashtbl.t
   ; dmethods: (string, llvalue) Hashtbl.t
   ; dsuper: (path * int) option
-  ; dkind: type_def_kind }
+  ; dkind: type_def_kind
+  ; dfield_defaults: (string, llvalue) Hashtbl.t }
 
 type gen_loop_meta = {lafter: llbasicblock; lstart: llbasicblock}
 
@@ -90,6 +91,7 @@ let rec resolve_pointer ctx ptr =
 
 let rec find_member ctx obj_path obj_ptr name =
   let ptr = resolve_pointer ctx obj_ptr in
+  assert (classify_type (element_type (type_of ptr)) = Struct) ;
   let meta = Hashtbl.find_exn ctx.gen_typedefs obj_path in
   match Hashtbl.find meta.dfield_indicies name with
   | Some ind -> Some (build_struct_gep ptr ind name ctx.gen_builder)
@@ -361,6 +363,11 @@ let rec gen_expr ctx (def, pos) =
             build_alloca meta.dstruct ("struct_" ^ s_path path) ctx.gen_builder
         | EClass _ -> gc_malloc ctx meta.dstruct ("class_" ^ s_path path)
       in
+      Hashtbl.iter_keys meta.dfield_defaults ~f:(fun name ->
+          let con = Hashtbl.find_exn meta.dfield_defaults name in
+          let ind = Hashtbl.find_exn meta.dfield_indicies name in
+          let field_ptr = build_struct_gep ptr ind name ctx.gen_builder in
+          ignore (build_store con field_ptr ctx.gen_builder) ) ;
       ignore
         (build_call constr (Array.of_list ([ptr] @ args)) "new" ctx.gen_builder) ;
       ptr
@@ -380,21 +387,27 @@ let rec gen_expr ctx (def, pos) =
 
 let pre_gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
-  let types = Bag.create () in
+  let types = ref [] in
   let indices = String.Table.create () in
   let statics = String.Table.create () in
   let methods = String.Table.create () in
+  let defaults = String.Table.create () in
   ctx.gen_local_path <- Some meta.tepath ;
   (* generate fields *)
   List.iter
     ~f:(fun (field, _) ->
       let is_static = Set.mem field.tmmods MStatic in
       match field.tmkind with
-      | TMVar (_, ty, _) when not is_static ->
+      | TMVar (_, ty, def) when not is_static -> (
           let llty = gen_ty ctx ty in
           ignore
-            (Hashtbl.add indices ~key:field.tmname ~data:(Bag.length types)) ;
-          ignore (Bag.add types llty)
+            (Hashtbl.add indices ~key:field.tmname ~data:(List.length !types)) ;
+          ignore (types := !types @ [llty]) ;
+          match def with
+          | Some v ->
+              ignore
+                (Hashtbl.add defaults ~key:field.tmname ~data:(gen_const ctx v))
+          | None -> () )
       | _ -> () )
     meta.temembers ;
   ignore
@@ -405,32 +418,34 @@ let pre_gen_typedef ctx (meta, _) =
           | Some path ->
               let super = Hashtbl.find_exn ctx.gen_typedefs path in
               let super_ty = super.dstruct in
-              ignore (Bag.add types super_ty) ;
-              Some (path, Bag.length types - 1)
+              types := !types @ [super_ty] ;
+              Some (path, List.length !types - 1)
           | _ -> None
         in
         let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
-        struct_set_body gen (Bag.to_array types) false ;
+        struct_set_body gen (List.to_array !types) false ;
         let dmeta =
           { dstruct= gen
           ; dfield_indicies= indices
           ; dstatics= statics
           ; dmethods= methods
           ; dsuper= extends
-          ; dkind= meta.tekind }
+          ; dkind= meta.tekind
+          ; dfield_defaults= defaults }
         in
         ctx.gen_this_ty <- gen ;
         Hashtbl.add ctx.gen_typedefs ~key:meta.tepath ~data:dmeta
     | EStruct ->
         let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
-        struct_set_body gen (Bag.to_array types) false ;
+        struct_set_body gen (List.to_array !types) false ;
         let dmeta =
           { dstruct= gen
           ; dfield_indicies= indices
           ; dstatics= statics
           ; dmethods= methods
           ; dsuper= None
-          ; dkind= meta.tekind }
+          ; dkind= meta.tekind
+          ; dfield_defaults= defaults }
         in
         ctx.gen_this_ty <- gen ;
         Hashtbl.add ctx.gen_typedefs ~key:meta.tepath ~data:dmeta ) ;
@@ -440,8 +455,8 @@ let pre_gen_typedef ctx (meta, _) =
       let is_extern = Set.mem field.tmmods MExtern in
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
-      | TMVar (Constant, _, Some v) when is_static ->
-          let v = gen_expr ctx v in
+      | TMVar (Constant, _, Some c) when is_static ->
+          let v = gen_const ctx c in
           let global = Llvm.define_global name v ctx.gen_mod in
           set_unnamed_addr true global ;
           ignore (Hashtbl.add statics ~key:field.tmname ~data:global)
@@ -497,7 +512,6 @@ let pre_gen_typedef ctx (meta, _) =
   meta.temembers
 
 let gen_typedef ctx (meta, _) =
-  let meta : ty_type_def_meta = meta in
   ctx.gen_local_path <- Some meta.tepath ;
   let meta_meta = Hashtbl.find_exn ctx.gen_typedefs meta.tepath in
   ctx.gen_this_ty <- meta_meta.dstruct ;
@@ -506,13 +520,13 @@ let gen_typedef ctx (meta, _) =
       let is_static = Set.mem field.tmmods MStatic in
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
-      | TMVar (Variable, _, Some va) when is_static ->
+      | TMVar (Variable, _, Some c) when is_static ->
           let global =
             get "global not found" (lookup_global name ctx.gen_mod)
           in
           set_global_constant true global ;
           set_externally_initialized false global ;
-          set_initializer global (gen_expr ctx va)
+          set_initializer global (gen_const ctx c)
       | TMFunc (args, ret, ex) when not (Set.mem field.tmmods MExtern) ->
           let is_main = is_static && field.tmname = "main" && args = [] in
           let func, entry =
@@ -593,7 +607,6 @@ let optimize ctx opt_level =
 
 let build ctx output_file opt_level =
   optimize ctx opt_level ;
-  dump_module ctx.gen_mod ;
   let triple = Target.default_triple () in
   let target = Target.by_triple triple in
   let target_mach = TargetMachine.create ~triple target in

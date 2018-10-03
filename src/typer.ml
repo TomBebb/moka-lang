@@ -26,7 +26,7 @@ and ty_expr_meta = {edef: ty_expr_def; ety: ty}
 and ty_expr = ty_expr_meta span
 
 type ty_member_kind =
-  | TMVar of variability * ty * ty_expr option
+  | TMVar of variability * ty * const option
   | TMFunc of param list * ty * ty_expr
   | TMConstr of param list * ty_expr
 
@@ -337,10 +337,10 @@ let rec type_expr ctx ex =
       let v = match v with Some v -> Some (type_expr ctx v) | None -> None in
       mk (TEReturn v) (TPrim TVoid)
 
-and type_of_member ctx (def, pos) =
+and type_of_member _ (def, pos) =
   match def.mkind with
   | MVar (v, Some ty, _) -> (v, ty)
-  | MVar (v, None, Some ex) -> (v, ty_of (type_expr ctx ex))
+  | MVar (v, None, Some c) -> (v, TPrim (type_of_const c))
   | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
   | MFunc (params, ret, _) ->
       (Constant, TFunc (List.map ~f:(fun par -> par.ptype) params, ret))
@@ -379,9 +379,7 @@ let type_member ctx (def, pos) =
   let kind =
     match def.mkind with
     | MVar (v, Some ty, None) -> TMVar (v, ty, None)
-    | MVar (v, _, Some ex) ->
-        let ex = type_expr ctx ex in
-        TMVar (v, ty_of ex, Some ex)
+    | MVar (v, _, Some c) -> TMVar (v, TPrim (type_of_const c), Some c)
     | MVar (_, None, None) ->
         raise (Error (UnresolvedFieldType def.mname, pos))
     | MFunc (params, ret, body) ->

@@ -61,7 +61,7 @@ and expr = expr_def span
 type param = {pname: string; ptype: ty}
 
 type member_kind =
-  | MVar of variability * ty option * expr option
+  | MVar of variability * ty option * const option
   | MFunc of param list * ty * expr
   | MConstr of param list * expr
 
