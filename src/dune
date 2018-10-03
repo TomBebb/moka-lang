@@ -1,7 +1,6 @@
 (executable
  (name        main)
  (libraries 
-   core
    llvm
    llvm.analysis
    llvm.executionengine
@@ -9,7 +8,6 @@
    llvm.scalar_opts
    llvm.all_backends
    llvm.passmgr_builder
-   stdio
    sedlex
  )
  (preprocess (pps ppx_deriving.std ppx_enumerate sedlex.ppx))
