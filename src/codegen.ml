@@ -3,7 +3,7 @@ open Llvm_target
 open Type
 open Typer
 open Ast
-open Printf
+open Core_kernel
 
 type error_kind = UnresolvedLHS | UnresolvedIdent of string
 
@@ -33,7 +33,7 @@ type gen_ctx =
   ; mutable gen_this: llvalue option
   ; mutable gen_this_ty: lltype
   ; mutable gen_local_path: path option
-  ; gen_typedefs: (path, gen_def_meta) Hashtbl.t
+  ; gen_typedefs: (path, gen_def_meta) Hashtbl.Poly.t
   ; gen_size_t: lltype
   ; gen_loops: gen_loop_meta Stack.t }
 
@@ -61,25 +61,25 @@ let init () =
   ; gen_this_ty= void_type ctx
   ; gen_builder= builder
   ; gen_local_path= None
-  ; gen_typedefs= Hashtbl.create 10
+  ; gen_typedefs= Hashtbl.Poly.create ()
   ; gen_size_t= size_t
   ; gen_loops= Stack.create () }
 
-let enter_block ctx = Stack.push (Hashtbl.create 12) ctx.gen_vars
+let enter_block ctx = Stack.push ctx.gen_vars (String.Table.create ~size:4 ())
 
 let leave_block ctx = Stack.pop ctx.gen_vars
 
 let get err_msg = function None -> raise (Failure err_msg) | Some v -> v
 
 let member_name _ path field =
-  match Hashtbl.find_opt field.tmatts "LinkName" with
-  | Some (CString name) when MemberMods.mem MStatic field.tmmods -> name
+  match Hashtbl.find field.tmatts "LinkName" with
+  | Some (CString name) when Set.mem field.tmmods MStatic -> name
   | _ -> s_path path ^ "_" ^ field.tmname
 
 let maybe_load ctx name v should_load =
   let is_func =
-    classify_type (type_of v) == TypeKind.Pointer
-    && classify_type (element_type (type_of v)) == TypeKind.Function
+    classify_type (type_of v) = TypeKind.Pointer
+    && classify_type (element_type (type_of v)) = TypeKind.Function
   in
   if should_load && not is_func then build_load v name ctx.gen_builder else v
 
@@ -92,8 +92,8 @@ let rec resolve_pointer ctx ptr =
 
 let rec find_member ctx obj_path obj_ptr name =
   let ptr = resolve_pointer ctx obj_ptr in
-  let meta = Hashtbl.find ctx.gen_typedefs obj_path in
-  match Hashtbl.find_opt meta.dfield_indicies name with
+  let meta = Hashtbl.find_exn ctx.gen_typedefs obj_path in
+  match Hashtbl.find meta.dfield_indicies name with
   | Some ind -> Some (build_struct_gep ptr ind name ctx.gen_builder)
   | _ -> (
     match meta.dsuper with
@@ -104,17 +104,15 @@ let rec find_member ctx obj_path obj_ptr name =
 
 let find_var ctx name should_load =
   let res = ref None in
-  Stack.iter
-    (fun (tbl : (string, llvalue) Hashtbl.t) ->
-      match Hashtbl.find_opt tbl name with
-      | Some v when !res == None ->
+  Stack.iter ctx.gen_vars ~f:(fun (tbl : (string, llvalue) Hashtbl.t) ->
+      match Hashtbl.find tbl name with
+      | Some v when !res = None ->
           res := Some (maybe_load ctx name v should_load)
-      | _ -> () )
-    ctx.gen_vars ;
+      | _ -> () ) ;
   let local_path = get "no local path" ctx.gen_local_path in
-  let local_meta = Hashtbl.find ctx.gen_typedefs local_path in
-  ( match Hashtbl.find_opt local_meta.dstatics name with
-  | Some s when !res == None -> res := Some (maybe_load ctx name s should_load)
+  let local_meta = Hashtbl.find_exn ctx.gen_typedefs local_path in
+  ( match Hashtbl.find local_meta.dstatics name with
+  | Some s when !res = None -> res := Some (maybe_load ctx name s should_load)
   | _ -> () ) ;
   let this = get "no this" ctx.gen_this in
   ( if !res = None then
@@ -126,12 +124,14 @@ let find_var ctx name should_load =
            should_load) ) ;
   !res
 
-let set_var ctx name value = Hashtbl.add (Stack.top ctx.gen_vars) name value
+let set_var ctx name value =
+  let vars = Stack.top_exn ctx.gen_vars in
+  ignore (Hashtbl.add vars ~key:name ~data:value)
 
 let rec find_method ctx path obj_ptr name =
-  let meta = Hashtbl.find ctx.gen_typedefs path in
+  let meta = Hashtbl.find_exn ctx.gen_typedefs path in
   let ptr = resolve_pointer ctx obj_ptr in
-  match Hashtbl.find_opt meta.dmethods name with
+  match Hashtbl.find meta.dmethods name with
   | Some m -> (ptr, m)
   | None -> (
     match meta.dsuper with
@@ -144,7 +144,7 @@ let rec gen_ty ctx ty =
   match ty with
   | TFunc (args, ret) ->
       Llvm.function_type (gen_ty ctx ret)
-        (Array.of_list (List.map (gen_ty ctx) args))
+        (Array.of_list (List.map args ~f:(gen_ty ctx)))
   | TPrim TVoid -> Llvm.void_type ctx.gen_ctx
   | TPrim TBool -> Llvm.i1_type ctx.gen_ctx
   | TPrim TByte -> Llvm.i8_type ctx.gen_ctx
@@ -155,7 +155,7 @@ let rec gen_ty ctx ty =
   | TPrim TDouble -> Llvm.double_type ctx.gen_ctx
   | TPrim TString -> Llvm.pointer_type (i8_type ctx.gen_ctx)
   | TPath path ->
-      Llvm.pointer_type (Hashtbl.find ctx.gen_typedefs path).dstruct
+      Llvm.pointer_type (Hashtbl.find_exn ctx.gen_typedefs path).dstruct
   | _ -> raise (Failure (sprintf "Cannot generate %s" (s_ty ty)))
 
 let gen_const ctx = function
@@ -204,7 +204,7 @@ let rec gen_expr ctx (def, pos) =
   | TESuper -> (
       let this = get "unresolved this" ctx.gen_this in
       let meta =
-        Hashtbl.find ctx.gen_typedefs (get "no path" ctx.gen_local_path)
+        Hashtbl.find_exn ctx.gen_typedefs (get "no path" ctx.gen_local_path)
       in
       match meta.dsuper with
       | Some (_, ind) -> build_struct_gep this ind "super" ctx.gen_builder
@@ -273,7 +273,7 @@ let rec gen_expr ctx (def, pos) =
       res
   | TEBlock exprs -> (
       let last = ref None in
-      List.iter (fun ex -> last := Some (gen_expr ctx ex)) exprs ;
+      List.iter ~f:(fun ex -> last := Some (gen_expr ctx ex)) exprs ;
       match !last with Some v -> v | None -> gen_const ctx (CInt 0) )
   | TEIf (cond, if_e, Some else_e) ->
       let cond = gen_expr ctx cond in
@@ -307,7 +307,7 @@ let rec gen_expr ctx (def, pos) =
       let cond_bl = append_block ctx.gen_ctx "cond" ctx.gen_func in
       let inner_bl = append_block ctx.gen_ctx "then" ctx.gen_func in
       let after_bl = append_block ctx.gen_ctx "after" ctx.gen_func in
-      Stack.push {lstart= cond_bl; lafter= after_bl} ctx.gen_loops ;
+      Stack.push ctx.gen_loops {lstart= cond_bl; lafter= after_bl} ;
       ignore (build_br cond_bl ctx.gen_builder) ;
       Llvm.position_at_end cond_bl ctx.gen_builder ;
       let cond = gen_expr ctx cond in
@@ -319,25 +319,25 @@ let rec gen_expr ctx (def, pos) =
       ignore (Stack.pop ctx.gen_loops) ;
       cond
   | TECall (({edef= TESuper; _}, _), args) ->
-      let args = List.map (gen_expr ctx) args in
+      let args = List.map ~f:(gen_expr ctx) args in
       let this_path = get "no path found" ctx.gen_local_path in
-      let meta = Hashtbl.find ctx.gen_typedefs this_path in
+      let meta = Hashtbl.find_exn ctx.gen_typedefs this_path in
       let super_path, index = get "no super" meta.dsuper in
-      let super_meta = Hashtbl.find ctx.gen_typedefs super_path in
-      let func = Hashtbl.find super_meta.dstatics "new" in
+      let super_meta = Hashtbl.find_exn ctx.gen_typedefs super_path in
+      let func = Hashtbl.find_exn super_meta.dstatics "new" in
       let this = get "this" ctx.gen_this in
       let ptr = build_struct_gep this index "super" ctx.gen_builder in
       build_call func (Array.of_list ([ptr] @ args)) "" ctx.gen_builder
   | TECall ((def, pos), args) ->
-      let args = ref (List.map (gen_expr ctx) args) in
+      let args = ref (List.map ~f:(gen_expr ctx) args) in
       let func =
         match def.edef with
         | TEField (o, f) -> (
             let obj_t = ty_of o in
             match obj_t with
             | TClass path ->
-                let meta = Hashtbl.find ctx.gen_typedefs path in
-                Hashtbl.find meta.dstatics f
+                let meta = Hashtbl.find_exn ctx.gen_typedefs path in
+                Hashtbl.find_exn meta.dstatics f
             | TPath path ->
                 let obj = gen_expr_lhs ctx o in
                 let ptr, meth = find_method ctx path obj f in
@@ -354,9 +354,9 @@ let rec gen_expr ctx (def, pos) =
         (if is_void then "" else "func_res")
         ctx.gen_builder
   | TENew (path, args) ->
-      let meta = Hashtbl.find ctx.gen_typedefs path in
-      let constr = Hashtbl.find meta.dstatics "new" in
-      let args = List.map (gen_expr ctx) args in
+      let meta = Hashtbl.find_exn ctx.gen_typedefs path in
+      let constr = Hashtbl.find_exn meta.dstatics "new" in
+      let args = List.map ~f:(gen_expr ctx) args in
       let ptr =
         match meta.dkind with
         | EStruct ->
@@ -368,11 +368,11 @@ let rec gen_expr ctx (def, pos) =
       ptr
   | TEParen inner -> gen_expr ctx inner
   | TEBreak ->
-      let loop = Stack.top ctx.gen_loops in
+      let loop = Stack.top_exn ctx.gen_loops in
       ignore (build_br loop.lafter ctx.gen_builder) ;
       gen_const ctx (CInt 0)
   | TEContinue ->
-      let loop = Stack.top ctx.gen_loops in
+      let loop = Stack.top_exn ctx.gen_loops in
       ignore (build_br loop.lstart ctx.gen_builder) ;
       gen_const ctx (CInt 0)
   | TEReturn None -> build_ret_void ctx.gen_builder
@@ -382,74 +382,76 @@ let rec gen_expr ctx (def, pos) =
 
 let pre_gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
-  let types = ref [] in
-  let indices = Hashtbl.create 16 in
+  let types : lltype list ref = ref [] in
+  let indices = String.Table.create () in
   let push ty = types := !types @ [ty] in
-  let statics = Hashtbl.create 16 in
-  let methods = Hashtbl.create 10 in
+  let statics = String.Table.create () in
+  let methods = String.Table.create () in
   ctx.gen_local_path <- Some meta.tepath ;
   (* generate fields *)
   List.iter
-    (fun (field, _) ->
-      let is_static = MemberMods.mem MStatic field.tmmods in
+    ~f:(fun (field, _) ->
+      let is_static = Set.mem field.tmmods MStatic in
       match field.tmkind with
       | TMVar (_, ty, _) when not is_static ->
           let llty = gen_ty ctx ty in
-          Hashtbl.add indices field.tmname (List.length !types) ;
+          ignore
+            (Hashtbl.add indices ~key:field.tmname ~data:(List.length !types)) ;
           push llty
       | _ -> () )
     meta.temembers ;
-  ( match meta.tekind with
-  | EClass cl ->
-      let extends =
-        match cl.cextends with
-        | Some path ->
-            let super = Hashtbl.find ctx.gen_typedefs path in
-            let super_ty = super.dstruct in
-            types := !types @ [super_ty] ;
-            Some (path, List.length !types - 1)
-        | _ -> None
-      in
-      let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
-      struct_set_body gen (Array.of_list !types) false ;
-      let dmeta =
-        { dstruct= gen
-        ; dfield_indicies= indices
-        ; dstatics= statics
-        ; dmethods= methods
-        ; dsuper= extends
-        ; dkind= meta.tekind }
-      in
-      ctx.gen_this_ty <- gen ;
-      Hashtbl.add ctx.gen_typedefs meta.tepath dmeta
-  | EStruct ->
-      let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
-      struct_set_body gen (Array.of_list !types) false ;
-      let dmeta =
-        { dstruct= gen
-        ; dfield_indicies= indices
-        ; dstatics= statics
-        ; dmethods= methods
-        ; dsuper= None
-        ; dkind= meta.tekind }
-      in
-      ctx.gen_this_ty <- gen ;
-      Hashtbl.add ctx.gen_typedefs meta.tepath dmeta ) ;
+  ignore
+    ( match meta.tekind with
+    | EClass cl ->
+        let extends =
+          match cl.cextends with
+          | Some path ->
+              let super = Hashtbl.find_exn ctx.gen_typedefs path in
+              let super_ty = super.dstruct in
+              types := !types @ [super_ty] ;
+              Some (path, List.length !types - 1)
+          | _ -> None
+        in
+        let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
+        struct_set_body gen (Array.of_list !types) false ;
+        let dmeta =
+          { dstruct= gen
+          ; dfield_indicies= indices
+          ; dstatics= statics
+          ; dmethods= methods
+          ; dsuper= extends
+          ; dkind= meta.tekind }
+        in
+        ctx.gen_this_ty <- gen ;
+        Hashtbl.add ctx.gen_typedefs ~key:meta.tepath ~data:dmeta
+    | EStruct ->
+        let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
+        struct_set_body gen (Array.of_list !types) false ;
+        let dmeta =
+          { dstruct= gen
+          ; dfield_indicies= indices
+          ; dstatics= statics
+          ; dmethods= methods
+          ; dsuper= None
+          ; dkind= meta.tekind }
+        in
+        ctx.gen_this_ty <- gen ;
+        Hashtbl.add ctx.gen_typedefs ~key:meta.tepath ~data:dmeta ) ;
   List.iter
-    (fun (field, _) ->
-      let is_static = MemberMods.mem MStatic field.tmmods in
-      let is_extern = MemberMods.mem MExtern field.tmmods in
+    ~f:(fun (field, _) ->
+      let is_static = Set.mem field.tmmods MStatic in
+      let is_extern = Set.mem field.tmmods MExtern in
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
       | TMVar (Constant, _, Some v) when is_static ->
           let v = gen_expr ctx v in
           let global = Llvm.define_global name v ctx.gen_mod in
           set_unnamed_addr true global ;
-          Hashtbl.add statics field.tmname global
+          ignore (Hashtbl.add statics ~key:field.tmname ~data:global)
       | TMVar (_, ty, None) when is_static ->
           let llty = gen_ty ctx ty in
           let global = Llvm.declare_global llty name ctx.gen_mod in
-          Hashtbl.add statics field.tmname global
+          ignore (Hashtbl.add statics ~key:field.tmname ~data:global)
       | TMVar (_, _, _) -> ()
       | TMFunc ([], TPrim TInt, _) when is_static && field.tmname = "main" ->
           ()
@@ -461,45 +463,50 @@ let pre_gen_typedef ctx (meta, _) =
               )
           in
           let callconv, is_var =
-            match (is_extern, Hashtbl.find_opt field.tmatts "CallConv") with
+            match (is_extern, Hashtbl.find field.tmatts "CallConv") with
             | _, Some (CString "vararg") -> (CallConv.c, true)
             | _, Some (CString "cold") -> (CallConv.cold, false)
             | true, _ -> (CallConv.c, false)
             | _ -> (CallConv.fast, false)
           in
-          let params = List.map (fun param -> gen_ty ctx param.ptype) params in
-          List.iter (fun param -> llpars := !llpars @ [param]) params ;
+          let params =
+            List.map ~f:(fun param -> gen_ty ctx param.ptype) params
+          in
+          List.iter ~f:(fun param -> llpars := !llpars @ [param]) params ;
           let sig_ty =
             (if is_var then var_arg_function_type else function_type)
               (gen_ty ctx ret) (Array.of_list !llpars)
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
           if not is_extern then set_function_call_conv callconv func ;
-          Hashtbl.add
-            (if is_static then statics else methods)
-            field.tmname func
+          ignore
+            (Hashtbl.add
+               (if is_static then statics else methods)
+               ~key:field.tmname ~data:func)
       | TMConstr (params, _) ->
           let this =
             gen_ty ctx (TPath (get "no path found" ctx.gen_local_path))
           in
-          let params = List.map (fun param -> gen_ty ctx param.ptype) params in
+          let params =
+            List.map ~f:(fun param -> gen_ty ctx param.ptype) params
+          in
           let sig_ty =
             Llvm.function_type ctx.gen_this_ty
               (Array.of_list ([this] @ params))
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
-          Hashtbl.add statics field.tmname func )
+          ignore (Hashtbl.add statics ~key:field.tmname ~data:func) )
     meta.temembers ;
   meta.temembers
 
 let gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
   ctx.gen_local_path <- Some meta.tepath ;
-  let meta_meta = Hashtbl.find ctx.gen_typedefs meta.tepath in
+  let meta_meta = Hashtbl.find_exn ctx.gen_typedefs meta.tepath in
   ctx.gen_this_ty <- meta_meta.dstruct ;
   List.iter
-    (fun (field, _) ->
-      let is_static = MemberMods.mem MStatic field.tmmods in
+    ~f:(fun (field, _) ->
+      let is_static = Set.mem field.tmmods MStatic in
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
       | TMVar (Variable, _, Some va) when is_static ->
@@ -509,8 +516,7 @@ let gen_typedef ctx (meta, _) =
           set_global_constant true global ;
           set_externally_initialized false global ;
           set_initializer global (gen_expr ctx va)
-      | TMFunc (args, ret, ex) when not (MemberMods.mem MExtern field.tmmods)
-        ->
+      | TMFunc (args, ret, ex) when not (Set.mem field.tmmods MExtern) ->
           let is_main = is_static && field.tmname = "main" && args = [] in
           let func, entry =
             if is_main then (ctx.gen_main, Llvm.entry_block ctx.gen_main)
@@ -530,7 +536,7 @@ let gen_typedef ctx (meta, _) =
               1 )
           in
           List.iteri
-            (fun index par ->
+            ~f:(fun index par ->
               let param = Llvm.param func (index_offset + index) in
               let ptr =
                 build_alloca (type_of param) par.pname ctx.gen_builder
@@ -559,7 +565,7 @@ let gen_typedef ctx (meta, _) =
           enter_block ctx ;
           ctx.gen_this <- Some (Llvm.param func 0) ;
           List.iteri
-            (fun index par ->
+            ~f:(fun index par ->
               let param = Llvm.param func (index + 1) in
               let ptr =
                 build_alloca (type_of param) par.pname ctx.gen_builder
@@ -575,9 +581,9 @@ let gen_typedef ctx (meta, _) =
   ()
 
 let pre_gen_mod ctx tm =
-  List.iter (fun def -> ignore (pre_gen_typedef ctx def)) tm.tmdefs
+  List.iter ~f:(fun def -> ignore (pre_gen_typedef ctx def)) tm.tmdefs
 
-let gen_mod ctx tm = List.iter (gen_typedef ctx) tm.tmdefs
+let gen_mod ctx tm = List.iter ~f:(gen_typedef ctx) tm.tmdefs
 
 let optimize ctx opt_level =
   print_endline "Optimizing" ;
@@ -599,7 +605,7 @@ let build ctx output_file opt_level =
     raise (Failure "object file already exists!") ;
   TargetMachine.emit_to_file ctx.gen_mod CodeGenFileType.ObjectFile object_file
     target_mach ;
-  if Sys.command (sprintf "clang -o %s %s -lgc" output_file object_file) == 1
+  if Sys.command (sprintf "clang -o %s %s -lgc" output_file object_file) = 1
   then raise (Failure "failed to link") ;
   Sys.remove object_file
 

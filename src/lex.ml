@@ -1,6 +1,7 @@
 open Ast
 open Token
 open Type
+open Core_kernel
 
 type error_kind = Unexpected of int | UnexpectedEof of string
 
@@ -148,7 +149,7 @@ and string1 strbuf buf =
 
 let lex_stream file =
   curr := init_cursor file ;
-  let ch = open_in file in
+  let ch = In_channel.create ~binary:false file in
   let buf = Sedlexing.Utf8.from_channel ch in
   let was_eof = ref false in
   Stream.from (fun _ ->

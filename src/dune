@@ -9,6 +9,7 @@
    llvm.all_backends
    llvm.passmgr_builder
    sedlex
+   core_kernel
  )
  (preprocess (pps ppx_deriving.std ppx_enumerate sedlex.ppx))
 )

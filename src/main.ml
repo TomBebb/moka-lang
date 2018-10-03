@@ -2,11 +2,12 @@ open Ast
 open Lex
 open Parser
 open Codegen
-open Printf
+open Core_kernel
 
 (* register exception printers *)
+
 let () =
-  Printexc.register_printer (function
+  Caml.Printexc.register_printer (function
     | Lex.Error (kind, pos) ->
         Some (sprintf "%s: Lexer error: %s" (s_pos pos) (Lex.error_msg kind))
     | Typer.Error (kind, pos) ->
@@ -67,9 +68,7 @@ let _ =
           Llvm.dump_module gen.gen_mod ;
           Codegen.build gen !output !opt_level )
     with e ->
-      let msg = Printexc.to_string e in
-      let stack = Printexc.get_backtrace () in
-      Printf.eprintf "error: %s%s\n" msg stack ;
+      Printf.eprintf "error: %s\n" (Exn.to_string e) ;
       raise e
   in
   ()

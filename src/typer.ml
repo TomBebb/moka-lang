@@ -1,6 +1,6 @@
 open Ast
 open Type
-open Printf
+open Core_kernel
 
 type ty_expr_def =
   | TEThis
@@ -33,7 +33,7 @@ type ty_member_kind =
 type ty_member_def =
   { tmname: string
   ; tmkind: ty_member_kind
-  ; tmmods: MemberMods.t
+  ; tmmods: member_mods
   ; tmty: ty
   ; tmatts: (string, const) Hashtbl.t }
 
@@ -42,7 +42,7 @@ type ty_member = ty_member_def span
 type ty_type_def_meta =
   { tepath: path
   ; tekind: type_def_kind
-  ; temods: ClassMods.t
+  ; temods: class_mods
   ; temembers: ty_member list }
 
 type ty_type_def = ty_type_def_meta span
@@ -90,10 +90,10 @@ let error_msg = function
   | NoMatchingConstr (p, ts) ->
       sprintf "No matching constructor found on '%s' taking args: %s"
         (s_path p)
-        (String.concat ", " (List.map s_ty ts))
+        (String.concat ~sep:", " (List.map ~f:s_ty ts))
   | NoMatchingMeth (p, n, ts) ->
       sprintf "No matching method '%s.%s' taking args: %s" (s_path p) n
-        (String.concat ", " (List.map s_ty ts))
+        (String.concat ~sep:", " (List.map ~f:s_ty ts))
   | NoReturn -> "No return"
 
 exception Error of error_kind span
@@ -108,7 +108,7 @@ type type_context =
 
 let init () =
   { tvars= Stack.create ()
-  ; ttypedefs= Hashtbl.create 2
+  ; ttypedefs= Hashtbl.Poly.create ()
   ; tthis= None
   ; tin_static= true
   ; tin_constructor= false
@@ -116,9 +116,9 @@ let init () =
 
 let unwrap_or_err o err = match o with Some v -> v | None -> raise err
 
-let find_or_err tbl key err = unwrap_or_err (Hashtbl.find_opt tbl key) err
+let find_or_err tbl key err = unwrap_or_err (Hashtbl.find tbl key) err
 
-let enter_block ctx = Stack.push (Hashtbl.create 12) ctx.tvars
+let enter_block ctx = Stack.push ctx.tvars (String.Table.create ~size:4 ())
 
 let leave_block ctx = Stack.pop ctx.tvars
 
@@ -132,7 +132,7 @@ let rec try_resolve_field ctx ty name pos =
   let tydef, _ =
     find_or_err ctx.ttypedefs path (Error (UnresolvedPath path, pos))
   in
-  match List.find_opt (fun (mem, _) -> mem.mname = name) tydef.emembers with
+  match List.find ~f:(fun (mem, _) -> mem.mname = name) tydef.emembers with
   | Some mem -> Some mem
   | None -> (
     match tydef.ekind with
@@ -149,7 +149,8 @@ let ty_of tex =
   let meta, _ = tex in
   meta.ety
 
-let set_var ctx name ty v = Hashtbl.add (Stack.top ctx.tvars) name (ty, v)
+let set_var ctx name ty v =
+  ignore (Hashtbl.add (Stack.top_exn ctx.tvars) ~key:name ~data:(ty, v))
 
 let rec as_pack ctx ex =
   let edef, _ = ex in
@@ -164,16 +165,18 @@ let as_path ctx ex =
   else
     let pack_arr = Array.of_list pack in
     let name = pack_arr.(Array.length pack_arr - 1) in
-    let pack_arr = Array.sub pack_arr 0 (Array.length pack_arr - 1) in
+    let pack_arr =
+      Array.sub pack_arr ~pos:0 ~len:(Array.length pack_arr - 1)
+    in
     Some (Array.to_list pack_arr, name)
 
 let find_matching_constr ctx path args pos =
   let def, _ = find_or_err ctx.ttypedefs path (Failure "type not found") in
   let constr =
-    List.find_opt
-      (fun (def, _) ->
+    List.find
+      ~f:(fun (def, _) ->
         match def.mkind with
-        | MConstr (params, _) -> List.map (fun p -> p.ptype) params = args
+        | MConstr (params, _) -> List.map ~f:(fun p -> p.ptype) params = args
         | _ -> false )
       def.emembers
   in
@@ -195,7 +198,7 @@ let rec type_expr ctx ex =
         let obj = type_expr ctx o in
         let member = resolve_field ctx (ty_of obj) f pos in
         let var, mem = type_of_member ctx member in
-        if var == Variable then mk (TEField (obj, f)) mem
+        if var = Variable then mk (TEField (obj, f)) mem
         else raise (Error (CannotAssign, pos))
     | _ -> raise (Error (InvalidLHS, pos))
   in
@@ -267,7 +270,7 @@ let rec type_expr ctx ex =
       let ty = ref (TPrim TVoid) in
       let exs =
         List.map
-          (fun ex ->
+          ~f:(fun ex ->
             let ty_ex = type_expr ctx ex in
             let meta, _ = ty_ex in
             ty := meta.ety ;
@@ -287,13 +290,13 @@ let rec type_expr ctx ex =
         | _ -> raise (Error (UnresolvedSuper, pos))
       in
       let super = type_expr ctx super in
-      let args = List.map (type_expr ctx) args in
-      let arg_tys = List.map ty_of args in
+      let args = List.map ~f:(type_expr ctx) args in
+      let arg_tys = List.map ~f:ty_of args in
       let _ = find_matching_constr ctx extends arg_tys pos in
       mk (TECall (super, args)) (TPrim TVoid)
   | ECall (func, args) ->
       let func = type_expr ctx func in
-      let args = List.map (type_expr ctx) args in
+      let args = List.map ~f:(type_expr ctx) args in
       mk
         (TECall (func, args))
         ( match ty_of func with
@@ -324,8 +327,8 @@ let rec type_expr ctx ex =
       let _ =
         find_or_err ctx.ttypedefs path (Error (UnresolvedPath path, pos))
       in
-      let args = List.map (type_expr ctx) args in
-      let arg_tys = List.map ty_of args in
+      let args = List.map ~f:(type_expr ctx) args in
+      let arg_tys = List.map ~f:ty_of args in
       let _ = find_matching_constr ctx path arg_tys pos in
       mk (TENew (path, args)) (TPath path)
   | EBreak | EContinue -> mk TEBreak (TPrim TVoid)
@@ -340,19 +343,18 @@ and type_of_member ctx (def, pos) =
   | MVar (v, None, Some ex) -> (v, ty_of (type_expr ctx ex))
   | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
   | MFunc (params, ret, _) ->
-      (Constant, TFunc (List.map (fun par -> par.ptype) params, ret))
+      (Constant, TFunc (List.map ~f:(fun par -> par.ptype) params, ret))
   | MConstr (params, _) ->
-      (Constant, TFunc (List.map (fun par -> par.ptype) params, TPrim TVoid))
+      (Constant, TFunc (List.map ~f:(fun par -> par.ptype) params, TPrim TVoid))
 
 and find_var ctx name pos =
   let res : (variability * ty) option ref = ref None in
   Stack.iter
-    (fun tbl ->
+    ~f:(fun tbl ->
       if !res <> None then ()
       else
-        match Hashtbl.find_opt tbl name with
-        | Some v -> res := Some v
-        | None -> () )
+        match Hashtbl.find tbl name with Some v -> res := Some v | None -> ()
+      )
     ctx.tvars ;
   ( match ctx.tthis with
   | None -> ()
@@ -371,7 +373,7 @@ and type_of_const = function
   | CNull -> TVoid
 
 let type_member ctx (def, pos) =
-  ctx.tin_static <- MemberMods.mem MStatic def.mmods ;
+  ctx.tin_static <- Set.mem def.mmods MStatic ;
   ctx.tin_constructor <- false ;
   ctx.thas_return <- false ;
   let kind =
@@ -384,7 +386,9 @@ let type_member ctx (def, pos) =
         raise (Error (UnresolvedFieldType def.mname, pos))
     | MFunc (params, ret, body) ->
         let _ = enter_block ctx in
-        List.iter (fun par -> set_var ctx par.pname Constant par.ptype) params ;
+        List.iter
+          ~f:(fun par -> set_var ctx par.pname Constant par.ptype)
+          params ;
         let body = type_expr ctx body in
         if ty_of body <> ret && not ctx.thas_return then
           raise (Error (NoReturn, pos)) ;
@@ -393,7 +397,9 @@ let type_member ctx (def, pos) =
     | MConstr (params, body) ->
         let _ = enter_block ctx in
         ctx.tin_constructor <- true ;
-        List.iter (fun par -> set_var ctx par.pname Constant par.ptype) params ;
+        List.iter
+          ~f:(fun par -> set_var ctx par.pname Constant par.ptype)
+          params ;
         let body = type_expr ctx body in
         let _ = leave_block ctx in
         ctx.tin_constructor <- false ;
@@ -409,18 +415,19 @@ let type_member ctx (def, pos) =
 
 let type_type_def ctx (def, pos) =
   ctx.tthis <- Some def.epath ;
-  Hashtbl.add ctx.ttypedefs def.epath (def, pos) ;
+  ignore (Hashtbl.add ctx.ttypedefs ~key:def.epath ~data:(def, pos)) ;
   ( { tepath= def.epath
     ; tekind= def.ekind
     ; temods= def.emods
-    ; temembers= List.map (type_member ctx) def.emembers }
+    ; temembers= List.map ~f:(type_member ctx) def.emembers }
   , pos )
 
 let type_mod ctx m =
   List.iter
-    (fun (def, pos) -> Hashtbl.add ctx.ttypedefs def.epath (def, pos))
+    ~f:(fun (def, pos) ->
+      ignore (Hashtbl.add ctx.ttypedefs ~key:def.epath ~data:(def, pos)) )
     m.mdefs ;
-  let defs : ty_type_def list = List.map (type_type_def ctx) m.mdefs in
+  let defs : ty_type_def list = List.map ~f:(type_type_def ctx) m.mdefs in
   {tmimports= m.mimports; tmdefs= defs; tmpackage= m.mpackage}
 
 let rec s_ty_expr tabs (meta, _) =
@@ -435,14 +442,14 @@ let rec s_ty_expr tabs (meta, _) =
   | TEUnOp (op, a) -> sprintf "%s%s" (s_unop op) (s_ty_expr tabs a)
   | TEBlock exs ->
       sprintf "{%s\n%s}"
-        (String.concat ""
+        (String.concat ~sep:""
            (List.map
-              (fun ex -> tabs ^ "\t" ^ s_ty_expr (tabs ^ "\t") ex ^ "\n")
+              ~f:(fun ex -> tabs ^ "\t" ^ s_ty_expr (tabs ^ "\t") ex ^ "\n")
               exs))
         tabs
   | TECall (f, exs) ->
       sprintf "%s(%s)" (s_ty_expr tabs f)
-        (String.concat "," (List.map (s_ty_expr tabs) exs))
+        (String.concat ~sep:"," (List.map ~f:(s_ty_expr tabs) exs))
   | TEParen ex -> sprintf "(%s)" (s_ty_expr tabs ex)
   | TEIf (cond, if_e, None) ->
       sprintf "if %s %s" (s_ty_expr tabs cond) (s_ty_expr tabs if_e)
@@ -458,7 +465,7 @@ let rec s_ty_expr tabs (meta, _) =
         (s_ty_expr tabs ex)
   | TENew (path, args) ->
       sprintf "new %s(%s)" (s_path path)
-        (String.concat "," (List.map (s_ty_expr tabs) args))
+        (String.concat ~sep:"," (List.map ~f:(s_ty_expr tabs) args))
   | TEBreak -> "break"
   | TEContinue -> "continue"
   | TEReturn None -> "return"

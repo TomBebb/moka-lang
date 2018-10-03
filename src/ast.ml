@@ -1,5 +1,5 @@
 open Type
-open Printf
+open Core_kernel
 
 type const =
   | CInt of int
@@ -67,34 +67,26 @@ type member_kind =
 
 type member_mod = MStatic | MPublic | MPrivate | MExtern
 
-module MemberMods = Set.Make (struct
-  let compare = Pervasives.compare
-
-  type t = member_mod
-end)
+type member_mods = member_mod Set.Poly.t
 
 type member_def =
   { mname: string
   ; mkind: member_kind
-  ; mmods: MemberMods.t
+  ; mmods: member_mods
   ; matts: (string, const) Hashtbl.t }
 
 type member = member_def span
 
 type class_mod = CPublic | CPrivate
 
-module ClassMods = Set.Make (struct
-  let compare = Pervasives.compare
-
-  type t = class_mod
-end)
+type class_mods = class_mod Set.Poly.t
 
 type class_def = {cextends: path option; cimplements: path list}
 
 type type_def_kind = EClass of class_def | EStruct
 
 type type_def_meta =
-  {epath: path; ekind: type_def_kind; emods: ClassMods.t; emembers: member list}
+  {epath: path; ekind: type_def_kind; emods: class_mods; emembers: member list}
 
 type type_def = type_def_meta span
 
@@ -153,14 +145,14 @@ let rec s_expr tabs (def, _) =
   | EUnOp (op, a) -> sprintf "%s%s" (s_unop op) (s_expr tabs a)
   | EBlock exs ->
       sprintf "{%s\n%s}"
-        (String.concat ""
+        (String.concat ~sep:""
            (List.map
-              (fun ex -> tabs ^ "\t" ^ s_expr (tabs ^ "\t") ex ^ "\n")
+              ~f:(fun ex -> tabs ^ "\t" ^ s_expr (tabs ^ "\t") ex ^ "\n")
               exs))
         tabs
   | ECall (f, exs) ->
       sprintf "%s(%s)" (s_expr tabs f)
-        (String.concat "," (List.map (s_expr tabs) exs))
+        (String.concat ~sep:"," (List.map ~f:(s_expr tabs) exs))
   | EParen ex -> sprintf "(%s)" (s_expr tabs ex)
   | EIf (cond, if_e, None) ->
       sprintf "if %s %s" (s_expr tabs cond) (s_expr tabs if_e)
@@ -175,7 +167,7 @@ let rec s_expr tabs (def, _) =
       sprintf "%s %s: %s = %s" (s_variability v) name (s_ty t) (s_expr tabs ex)
   | ENew (path, args) ->
       sprintf "new %s(%s)" (s_path path)
-        (String.concat "," (List.map (s_expr tabs) args))
+        (String.concat ~sep:"," (List.map ~f:(s_expr tabs) args))
   | EBreak -> "break"
   | EContinue -> "continue"
   | EReturn None -> "return"

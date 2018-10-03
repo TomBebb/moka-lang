@@ -1,7 +1,7 @@
 open Ast
 open Token
 open Type
-open Printf
+open Core_kernel
 
 type error_kind =
   | Unexpected of token * string
@@ -15,8 +15,8 @@ let error_msg = function
         (s_token_def expected) (s_token_def got) name
   | Expected (expected, got, name) ->
       sprintf "Expected one of %s but got '%s' while parsing %s"
-        (String.concat ", "
-           (List.map (fun tk -> "'" ^ s_token_def tk ^ "'") expected))
+        (String.concat ~sep:", "
+           (List.map ~f:(fun tk -> "'" ^ s_token_def tk ^ "'") expected))
         (s_token_def got) name
 
 exception Error of error_kind span
@@ -40,7 +40,7 @@ let expect_ident tks =
 let expect tks expected name =
   let tk = Stream.next tks in
   let def, pos = tk in
-  if not (List.mem def expected) then
+  if not (List.mem expected def ~equal:(fun a b -> a = b)) then
     raise (Error (mk (Expected (expected, def, name)) tk tk))
   else pos
 
@@ -62,7 +62,9 @@ let parse_pack tks =
 let parse_path tks =
   let parts = parse_pack tks in
   let name = last parts in
-  let parts = Array.sub (Array.of_list parts) 0 (List.length parts - 1) in
+  let parts =
+    Array.sub (Array.of_list parts) ~pos:0 ~len:(List.length parts - 1)
+  in
   (Array.to_list parts, name)
 
 let local_pack = ref []
@@ -134,7 +136,7 @@ let rec parse_expr tks =
         let value = parse_expr tks in
         let _, last_pos = value in
         mk_pos
-          (EVar ((if kind == KVar then Variable else Constant), ty, name, value))
+          (EVar ((if kind = KVar then Variable else Constant), ty, name, value))
           first_pos last_pos
     | TOpenParen ->
         let inner = parse_expr tks in
@@ -187,7 +189,7 @@ let expect_const tks =
   | _ -> raise (Error (mk_one (Unexpected (def, "constant")) pos))
 
 let parse_atts tks =
-  let atts = Hashtbl.create 5 in
+  let atts = Hashtbl.Poly.create () in
   while next_is tks TAt do
     ignore (Stream.next tks) ;
     let name, _ = expect_ident tks in
@@ -195,7 +197,7 @@ let parse_atts tks =
     let v = expect_const tks in
     ignore (expect tks [TCloseParen] "attribute") ;
     Printf.printf "Parsed attr: %s = %s\n" name (s_const v) ;
-    Hashtbl.add atts name v
+    ignore (Hashtbl.add atts ~key:name ~data:v)
   done ;
   atts
 
@@ -218,7 +220,7 @@ let parse_member_mod tks =
 let rec parse_member_mods tks mods =
   match parse_member_mod tks with
   | Some md ->
-      mods := MemberMods.add md !mods ;
+      mods := Set.add !mods md ;
       parse_member_mods tks mods
   | _ -> ()
 
@@ -236,11 +238,9 @@ let rec parse_params tks term =
 
 let parse_member tks =
   let atts = parse_atts tks in
-  let mods = ref MemberMods.empty in
+  let mods : member_mods ref = ref (Set.Poly.of_list []) in
   parse_member_mods tks mods ;
-  let is_extern =
-    MemberMods.mem MExtern !mods && MemberMods.mem MStatic !mods
-  in
+  let is_extern = Set.mem !mods MExtern && Set.mem !mods MStatic in
   let tk = Stream.next tks in
   let def, pos = tk in
   match def with
@@ -305,7 +305,7 @@ let parse_type_def tks =
       ( { epath= (!local_pack, name)
         ; emembers= members
         ; ekind= EStruct
-        ; emods= ClassMods.empty }
+        ; emods= Set.Poly.empty }
       , {pfile= start.pfile; pmin= start.pmin; pmax= last.pmax} )
   | TKeyword KClass ->
       let name, _ = expect_ident tks in
@@ -322,7 +322,7 @@ let parse_type_def tks =
       ( { epath= (!local_pack, name)
         ; emembers= members
         ; ekind= EClass cl
-        ; emods= ClassMods.empty }
+        ; emods= Set.Poly.empty }
       , {pfile= start.pfile; pmin= start.pmin; pmax= last.pmax} )
   | _ -> raise (Error (mk_one (Unexpected (def, "type definition")) start))
 
