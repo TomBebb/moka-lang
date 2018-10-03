@@ -1,0 +1,8 @@
+opam-version: "2.0"
+name: "moka-lang"
+version: "0.1"
+synopsis: "Toy object-oriented programming language"
+maintainer: "Tom Bebbington <tombebb@protonmail.com>"
+authors: "Tom Bebbington <tombebb@protonmail.com>"
+depends: [ "ocaml" "ocamlfind" "llvm" "sedlex" "ppx_deriving" "dune" ]
+build: ["dune" "build" "src/main.exe"]
