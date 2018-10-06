@@ -69,26 +69,42 @@ let parse_path tks =
 
 let local_pack = ref []
 
-let parse_ty tks =
+let rec parse_ty tks =
+  let rec parse_types delim last =
+    match Stream.peek tks with
+    | Some (def, _) when def = last -> []
+    | _ -> (
+        let ty = parse_ty tks in
+        match Stream.peek tks with
+        | Some (def, _) when def = delim ->
+            ignore (Stream.next tks) ;
+            [ty] @ parse_types delim last
+        | _ -> [ty] )
+  in
   match Stream.peek tks with
   | Some (TIdent _, _) -> TPath (parse_path tks)
   | Some (TKPrim p, _) ->
       ignore (Stream.next tks) ;
       TPrim p
+  | Some (TOpenParen, _) ->
+      ignore (Stream.next tks) ;
+      let mems = parse_types TComma TCloseParen in
+      ignore (expect tks [TCloseParen] "Tuple declaration") ;
+      TTuple mems
   | Some (def, pos) -> raise (Error (mk_one (Unexpected (def, "type")) pos))
   | None -> raise (Failure "unexpected eof parsing type")
 
-let rec parse_expr tks =
-  let rec parse_exprs tks term sep =
+let rec parse_expr kind tks =
+  let rec parse_exprs kind tks term sep =
     if next_is tks term then []
     else
-      let ex : expr = parse_expr tks in
+      let ex : expr = parse_expr kind tks in
       let peek : token span option = Stream.peek tks in
       match (sep, peek) with
-      | None, Some (_, _) -> [ex] @ parse_exprs tks term None
+      | None, Some (_, _) -> [ex] @ parse_exprs kind tks term None
       | Some sep, Some (tk, _) when tk = sep ->
           ignore (Stream.next tks) ;
-          [ex] @ parse_exprs tks term (Some sep)
+          [ex] @ parse_exprs kind tks term (Some sep)
       | _ -> [ex]
   in
   let parse_base_expr tks =
@@ -97,7 +113,7 @@ let rec parse_expr tks =
     | TIdent id -> mk_one (EIdent id) first_pos
     | TConst c -> mk_one (EConst c) first_pos
     | TUnOp op ->
-        let inner = parse_expr tks in
+        let inner = parse_expr "unary operand" tks in
         let _, last = inner in
         mk_pos (EUnOp (op, inner)) first_pos last
     | TKeyword KThis -> mk_one EThis first_pos
@@ -107,18 +123,20 @@ let rec parse_expr tks =
           if next_is tks TSemicolon then (
             ignore (Stream.next tks) ;
             None )
-          else Some (parse_expr tks)
+          else Some (parse_expr "return value" tks)
         in
         mk_one (EReturn inner) first_pos
     | TKeyword KNew ->
         let path = parse_path tks in
         ignore (expect tks [TOpenParen] "constructor call") ;
-        let args = parse_exprs tks TCloseParen (Some TComma) in
+        let args =
+          parse_exprs "constructor arguments" tks TCloseParen (Some TComma)
+        in
         let last = expect tks [TCloseParen] "constructor call" in
         mk_pos (ENew (path, args)) first_pos last
     | TKeyword KWhile ->
-        let cond = parse_expr tks in
-        let body = parse_expr tks in
+        let cond = parse_expr "while condition" tks in
+        let body = parse_expr "while body" tks in
         let _, last = body in
         mk_pos (EWhile (cond, body)) first_pos last
     | TKeyword KBreak -> mk_one EBreak first_pos
@@ -133,49 +151,64 @@ let rec parse_expr tks =
           else None
         in
         let _ = expect tks [TBinOp OpAssign] "variable declaration" in
-        let value = parse_expr tks in
+        let value = parse_expr "variable value" tks in
         let _, last_pos = value in
         mk_pos
           (EVar ((if kind = KVar then Variable else Constant), ty, name, value))
           first_pos last_pos
     | TOpenParen ->
-        let inner = parse_expr tks in
-        let last = expect tks [TCloseParen] "parenthesis" in
-        mk_pos (EParen inner) first_pos last
+        let inner = parse_expr "tuple or parenthesis" tks in
+        if next_is tks TComma then (
+          ignore (Stream.next tks) ;
+          let mems =
+            [inner]
+            @ parse_exprs "tuple declaration" tks TCloseParen (Some TComma)
+          in
+          let last_pos = expect tks [TCloseParen] "tuple declaration" in
+          mk_pos (ETuple mems) first_pos last_pos )
+        else
+          let last = expect tks [TCloseParen] "parenthesis" in
+          mk_pos (EParen inner) first_pos last
     | TOpenBrace ->
-        let exs = parse_exprs tks TCloseBrace None in
+        let exs = parse_exprs "block" tks TCloseBrace None in
         let last = expect tks [TCloseBrace] "block" in
         mk_pos (EBlock exs) first_pos last
     | TKeyword KIf ->
-        let cond = parse_expr tks in
-        let body = parse_expr tks in
+        let cond = parse_expr "if condition" tks in
+        let body = parse_expr "if body" tks in
         let else_bod =
           if next_is tks (TKeyword KElse) then
             Some
               (let _ = Stream.next tks in
-               parse_expr tks)
+               parse_expr "else body" tks)
           else None
         in
         mk_pos (EIf (cond, body, else_bod)) first_pos first_pos
-    | _ -> raise (Error (mk_one (Unexpected (first, "expression")) first_pos))
+    | _ -> raise (Error (mk_one (Unexpected (first, kind)) first_pos))
   in
   let rec parse_after_expr base tks =
+    let _, first = base in
     match Stream.peek tks with
     | Some (TDot, _) ->
         let _ = Stream.next tks in
         let field = expect_ident tks in
         let name, last = field in
-        let _, first = base in
         parse_after_expr (mk_pos (EField (base, name)) first last) tks
     | Some (TOpenParen, _) ->
         let _ = Stream.next tks in
-        let args = parse_exprs tks TCloseParen (Some TComma) in
+        let args =
+          parse_exprs "function arguments" tks TCloseParen (Some TComma)
+        in
         let last = expect tks [TCloseParen] "function call" in
-        let _, first = base in
         parse_after_expr (mk_pos (ECall (base, args)) first last) tks
+    | Some (TOpenBracket, _) ->
+        ignore (Stream.next tks) ;
+        let ind = parse_expr "index" tks in
+        let last = expect tks [TCloseBracket] "index" in
+        parse_after_expr (mk_pos (EArrayIndex (base, ind)) first last) tks
     | Some (TBinOp op, _) ->
         let _ = Stream.next tks in
-        let other = parse_expr tks in
+        let other = parse_expr "binary operand" tks in
         parse_after_expr (mk (EBinOp (op, base, other)) base other) tks
     | _ -> base
   in
@@ -260,7 +293,9 @@ let parse_member tks =
           parse_ty tks
         else TPrim TVoid
       in
-      let ex = if is_extern then (EBlock [], pos) else parse_expr tks in
+      let ex =
+        if is_extern then (EBlock [], pos) else parse_expr "function body" tks
+      in
       ( { mname= name
         ; mkind= (if is_new then MConstr (args, ex) else MFunc (args, ret, ex))
         ; mmods= !mods

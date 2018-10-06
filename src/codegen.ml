@@ -140,6 +140,9 @@ let rec find_method ctx path obj_ptr name =
         find_method ctx s super name
     | _ -> raise (Failure "method not found") )
 
+let tbl_find tbl key fail =
+  match Hashtbl.find tbl key with Some v -> v | None -> raise (Failure fail)
+
 let rec gen_ty ctx ty =
   match ty with
   | TFunc (args, ret) ->
@@ -155,8 +158,10 @@ let rec gen_ty ctx ty =
   | TPrim TDouble -> Llvm.double_type ctx.gen_ctx
   | TPrim TString -> Llvm.pointer_type (i8_type ctx.gen_ctx)
   | TPath path ->
-      Llvm.pointer_type (Hashtbl.find_exn ctx.gen_typedefs path).dstruct
-  | _ -> raise (Failure (sprintf "Cannot generate %s" (s_ty ty)))
+      Llvm.pointer_type (tbl_find ctx.gen_typedefs path (s_path path)).dstruct
+  | TTuple mems ->
+      struct_type ctx.gen_ctx (Array.of_list (List.map ~f:(gen_ty ctx) mems))
+  | _ -> raise (Failure "This type cannot be generated")
 
 let gen_const ctx = function
   | CInt i -> Llvm.const_int (gen_ty ctx (TPrim TInt)) i
@@ -196,7 +201,7 @@ let rec gen_defaults ctx ptr meta =
   in
   ()
 
-let rec gen_expr ctx (def, pos) =
+let rec gen_expr (ctx : gen_ctx) ((def, pos) : ty_expr) : llvalue =
   let rec gen_expr_lhs ctx (def, pos) =
     match def.edef with
     | TEThis -> get "unresolved this" ctx.gen_this
@@ -212,6 +217,15 @@ let rec gen_expr ctx (def, pos) =
         in
         let obj = gen_expr_lhs ctx obj in
         get f (find_member ctx path obj f)
+    | TEArrayIndex (obj, ind) -> (
+        let obj_v = gen_expr_lhs ctx obj in
+        let ind = gen_expr ctx ind in
+        match ty_of obj with
+        | TTuple _ ->
+            build_gep obj_v
+              [|gen_const ctx (CInt 0); ind|]
+              "tuplemem" ctx.gen_builder
+        | _ -> raise (Failure "unable to index") )
     | _ -> raise (Error (UnresolvedLHS, pos))
   in
   match def.edef with
@@ -233,11 +247,14 @@ let rec gen_expr ctx (def, pos) =
   | TEField (_, f) ->
       let ptr = gen_expr_lhs ctx (def, pos) in
       build_load ptr f ctx.gen_builder
+  | TEArrayIndex (_, _) ->
+      let ptr = gen_expr_lhs ctx (def, pos) in
+      build_load ptr "arrind" ctx.gen_builder
   | TEVar (_, _, name, v) ->
-      let v = gen_expr ctx v in
-      let ptr = Llvm.build_alloca (type_of v) name ctx.gen_builder in
-      let _ = Llvm.build_store v ptr ctx.gen_builder in
-      set_var ctx name ptr ; v
+      let v_val : llvalue = gen_expr ctx v in
+      let ptr = Llvm.build_alloca (type_of v_val) name ctx.gen_builder in
+      let _ = Llvm.build_store v_val ptr ctx.gen_builder in
+      set_var ctx name ptr ; v_val
   | TEUnOp (OpNeg, v) ->
       let v_val = gen_expr ctx v in
       let ty = def.ety in
@@ -306,9 +323,12 @@ let rec gen_expr ctx (def, pos) =
       let new_else_bl = insertion_block ctx.gen_builder in
       let _ = build_br after_bl ctx.gen_builder in
       Llvm.position_at_end after_bl ctx.gen_builder ;
-      build_phi
-        [(if_val, new_then_bl); (else_val, new_else_bl)]
-        "if" ctx.gen_builder
+      if ty_of if_e = TPrim TVoid || ty_of else_e = TPrim TVoid then
+        gen_const ctx (CInt 0)
+      else
+        build_phi
+          [(if_val, new_then_bl); (else_val, new_else_bl)]
+          "if" ctx.gen_builder
   | TEIf (cond, if_e, None) ->
       let cond = gen_expr ctx cond in
       let then_bl = append_block ctx.gen_ctx "then" ctx.gen_func in
@@ -381,9 +401,19 @@ let rec gen_expr ctx (def, pos) =
       in
       gen_defaults ctx ptr meta ;
       ignore
-        (build_call constr (Array.of_list ([ptr] @ args)) "new" ctx.gen_builder) ;
+        (build_call constr (Array.of_list ([ptr] @ args)) "" ctx.gen_builder) ;
       ptr
   | TEParen inner -> gen_expr ctx inner
+  | TETuple mems ->
+      let mems = List.map ~f:(gen_expr ctx) mems in
+      let ty = gen_ty ctx (ty_of (def, pos)) in
+      let ptr = build_alloca ty "tuple" ctx.gen_builder in
+      List.iteri mems ~f:(fun ind mem ->
+          let mem_ptr =
+            build_struct_gep ptr ind (string_of_int ind) ctx.gen_builder
+          in
+          ignore (build_store mem mem_ptr ctx.gen_builder) ) ;
+      build_load ptr "tuple" ctx.gen_builder
   | TEBreak ->
       let loop = Stack.top_exn ctx.gen_loops in
       ignore (build_br loop.lafter ctx.gen_builder) ;
@@ -515,7 +545,7 @@ let pre_gen_typedef ctx (meta, _) =
             List.map ~f:(fun param -> gen_ty ctx param.ptype) params
           in
           let sig_ty =
-            Llvm.function_type ctx.gen_this_ty
+            Llvm.function_type (void_type ctx.gen_ctx)
               (Array.of_list ([this] @ params))
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
@@ -576,6 +606,7 @@ let gen_typedef ctx (meta, _) =
             in
             () ) ;
           ignore (leave_block ctx) ;
+          print_endline (string_of_llvalue func) ;
           print_endline (sprintf "validating %s" name) ;
           Llvm_analysis.assert_valid_function func
       | TMConstr (args, body) ->
@@ -619,6 +650,7 @@ let optimize ctx opt_level =
 
 let build ctx output_file opt_level =
   optimize ctx opt_level ;
+  Llvm.dump_module ctx.gen_mod ;
   let triple = Target.default_triple () in
   let target = Target.by_triple triple in
   let target_mach = TargetMachine.create ~triple target in

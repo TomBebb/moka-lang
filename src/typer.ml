@@ -8,6 +8,7 @@ type ty_expr_def =
   | TEConst of const
   | TEIdent of string
   | TEField of ty_expr * string
+  | TEArrayIndex of ty_expr * ty_expr
   | TEBinOp of binop * ty_expr * ty_expr
   | TEUnOp of unop * ty_expr
   | TEBlock of ty_expr list
@@ -17,6 +18,7 @@ type ty_expr_def =
   | TEWhile of ty_expr * ty_expr
   | TEVar of variability * ty option * string * ty_expr
   | TENew of path * ty_expr list
+  | TETuple of ty_expr list
   | TEBreak
   | TEContinue
   | TEReturn of ty_expr option
@@ -58,6 +60,7 @@ type error_kind =
   | CannotField of ty
   | UnresolvedFieldType of string
   | CannotAssign
+  | CannotIndex
   | UnresolvedThis
   | UnresolvedSuper
   | Expected of ty * ty
@@ -72,6 +75,7 @@ let error_msg = function
   | UnresolvedPath p -> sprintf "Unresolved path '%s'" (s_path p)
   | UnresolvedThis -> "Unresolved this"
   | UnresolvedSuper -> "Unresolved super"
+  | CannotIndex -> "Cannot be indexed"
   | CannotBinOp (op, a, b) ->
       sprintf "Operation '%s' cannot be performed on types %s an %s"
         (s_binop op) (s_ty a) (s_ty b)
@@ -243,6 +247,21 @@ let rec type_expr ctx ex =
       let member = resolve_field ctx (ty_of obj) f pos in
       let _, mem = type_of_member ctx member in
       mk (TEField (obj, f)) mem
+  | EArrayIndex (o, i) ->
+      let obj = type_expr ctx o in
+      let ind = type_expr ctx i in
+      let var_t =
+        match ty_of obj with
+        | TTuple vs ->
+            let ind =
+              match i with
+              | EConst (CInt v), _ -> v
+              | _ -> raise (Failure "failed to parse index")
+            in
+            (Array.of_list vs).(ind)
+        | _ -> raise (Error (CannotIndex, pos))
+      in
+      mk (TEArrayIndex (obj, ind)) var_t
   | EUnOp (op, v) ->
       let v = type_expr ctx v in
       mk (TEUnOp (op, v)) (ty_of v)
@@ -331,6 +350,10 @@ let rec type_expr ctx ex =
       let arg_tys = List.map ~f:ty_of args in
       let _ = find_matching_constr ctx path arg_tys pos in
       mk (TENew (path, args)) (TPath path)
+  | ETuple mems ->
+      let mems = List.map ~f:(type_expr ctx) mems in
+      let ty = TTuple (List.map ~f:ty_of mems) in
+      mk (TETuple mems) ty
   | EBreak | EContinue -> mk TEBreak (TPrim TVoid)
   | EReturn v ->
       ctx.thas_return <- true ;
@@ -357,12 +380,12 @@ and find_var ctx name pos =
       )
     ctx.tvars ;
   ( match ctx.tthis with
-  | None -> ()
-  | Some t -> (
+  | Some t when !res = None -> (
       let mem = try_resolve_field ctx (TPath t) name pos in
       match mem with
       | Some mem -> res := Some (type_of_member ctx mem)
-      | _ -> () ) ) ;
+      | _ -> () )
+  | _ -> () ) ;
   !res
 
 and type_of_const = function
@@ -435,6 +458,8 @@ let rec s_ty_expr tabs (meta, _) =
   | TEConst c -> s_const c
   | TEIdent id -> id
   | TEField (o, f) -> sprintf "%s.%s" (s_ty_expr tabs o) f
+  | TEArrayIndex (a, i) ->
+      sprintf "%s[%s]" (s_ty_expr tabs a) (s_ty_expr tabs i)
   | TEBinOp (op, a, b) ->
       sprintf "%s %s %s" (s_ty_expr tabs a) (s_binop op) (s_ty_expr tabs b)
   | TEUnOp (op, a) -> sprintf "%s%s" (s_unop op) (s_ty_expr tabs a)
@@ -464,7 +489,34 @@ let rec s_ty_expr tabs (meta, _) =
   | TENew (path, args) ->
       sprintf "new %s(%s)" (s_path path)
         (String.concat ~sep:"," (List.map ~f:(s_ty_expr tabs) args))
+  | TETuple mems ->
+      sprintf "(%s)"
+        (String.concat ~sep:", " (List.map ~f:(s_ty_expr tabs) mems))
   | TEBreak -> "break"
   | TEContinue -> "continue"
   | TEReturn None -> "return"
   | TEReturn (Some v) -> sprintf "return %s" (s_ty_expr tabs v)
+
+let s_ty_member ((mem, _) : ty_member) : string =
+  match mem.tmkind with
+  | TMVar (vr, ty, va) ->
+      sprintf "%s %s: %s %s" (s_var vr) mem.tmname (s_ty ty)
+        (match va with Some v -> " = " ^ s_const v | _ -> "")
+  | TMFunc (pars, ret, body) ->
+      sprintf "func %s(%s): %s %s" mem.tmname
+        (String.concat ~sep:"," (List.map ~f:s_param pars))
+        (s_ty ret) (s_ty_expr "\t" body)
+  | TMConstr (pars, body) ->
+      sprintf "func new(%s) %s"
+        (String.concat ~sep:"," (List.map ~f:s_param pars))
+        (s_ty_expr "\t" body)
+
+let s_ty_type_def ((def, _) : ty_type_def) : string =
+  sprintf "%s %s {\n%s\n}"
+    (match def.tekind with EClass _ -> "class" | EStruct -> "struct")
+    (s_path def.tepath)
+    (String.concat ~sep:"\n\t" (List.map ~f:s_ty_member def.temembers))
+
+let s_ty_module m =
+  sprintf "package %s\n%s" (s_pack m.tmpackage)
+    (String.concat ~sep:"\n" (List.map ~f:s_ty_type_def m.tmdefs))

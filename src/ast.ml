@@ -43,6 +43,7 @@ type expr_def =
   | EConst of const
   | EIdent of string
   | EField of expr * string
+  | EArrayIndex of expr * expr
   | EBinOp of binop * expr * expr
   | EUnOp of unop * expr
   | EBlock of expr list
@@ -53,6 +54,7 @@ type expr_def =
   | EVar of variability * ty option * string * expr
   | ENew of path * expr list
   | EReturn of expr option
+  | ETuple of expr list
   | EBreak
   | EContinue
 
@@ -140,15 +142,14 @@ let rec s_expr tabs (def, _) =
   | EConst c -> s_const c
   | EIdent id -> id
   | EField (o, f) -> sprintf "%s.%s" (s_expr tabs o) f
+  | EArrayIndex (a, i) -> sprintf "%s[%s]" (s_expr tabs a) (s_expr tabs i)
   | EBinOp (op, a, b) ->
       sprintf "%s %s %s" (s_expr tabs a) (s_binop op) (s_expr tabs b)
   | EUnOp (op, a) -> sprintf "%s%s" (s_unop op) (s_expr tabs a)
   | EBlock exs ->
-      sprintf "{%s\n%s}"
-        (String.concat ~sep:""
-           (List.map
-              ~f:(fun ex -> tabs ^ "\t" ^ s_expr (tabs ^ "\t") ex ^ "\n")
-              exs))
+      let tabs = tabs ^ "\t" in
+      sprintf "{\n%s%s\n%s}" tabs
+        (String.concat ~sep:("\n" ^ tabs) (List.map ~f:(s_expr tabs) exs))
         tabs
   | ECall (f, exs) ->
       sprintf "%s(%s)" (s_expr tabs f)
@@ -167,8 +168,39 @@ let rec s_expr tabs (def, _) =
       sprintf "%s %s: %s = %s" (s_variability v) name (s_ty t) (s_expr tabs ex)
   | ENew (path, args) ->
       sprintf "new %s(%s)" (s_path path)
-        (String.concat ~sep:"," (List.map ~f:(s_expr tabs) args))
+        (String.concat ~sep:", " (List.map ~f:(s_expr tabs) args))
+  | ETuple mems ->
+      sprintf "(%s)" (String.concat ~sep:", " (List.map ~f:(s_expr tabs) mems))
   | EBreak -> "break"
   | EContinue -> "continue"
   | EReturn None -> "return"
   | EReturn (Some v) -> sprintf "return %s" (s_expr tabs v)
+
+let s_var = function Variable -> "var" | Constant -> "val"
+
+let s_param p = sprintf "%s: %s" p.pname (s_ty p.ptype)
+
+let s_member ((mem, _) : member) : string =
+  match mem.mkind with
+  | MVar (vr, ty, va) ->
+      sprintf "%s %s %s %s" (s_var vr) mem.mname
+        (match ty with Some t -> ":" ^ s_ty t | _ -> "")
+        (match va with Some v -> " = " ^ s_const v | _ -> "")
+  | MFunc (pars, ret, body) ->
+      sprintf "func %s(%s): %s %s" mem.mname
+        (String.concat ~sep:"," (List.map ~f:s_param pars))
+        (s_ty ret) (s_expr "\t" body)
+  | MConstr (pars, body) ->
+      sprintf "func new(%s) %s"
+        (String.concat ~sep:"," (List.map ~f:s_param pars))
+        (s_expr "\t" body)
+
+let s_type_def ((def, _) : type_def) : string =
+  sprintf "%s %s {\n%s\n}"
+    (match def.ekind with EClass _ -> "class" | EStruct -> "struct")
+    (s_path def.epath)
+    (String.concat ~sep:"\n\t" (List.map ~f:s_member def.emembers))
+
+let s_module m =
+  sprintf "package %s\n%s" (s_pack m.mpackage)
+    (String.concat ~sep:"\n" (List.map ~f:s_type_def m.mdefs))

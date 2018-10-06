@@ -18,6 +18,7 @@ type ty =
   | TPath of path
   | TFunc of ty list * ty
   | TClass of path
+  | TTuple of ty list
 
 let s_primitive_ty = function
   | TVoid -> "void"
@@ -40,6 +41,7 @@ let rec s_ty = function
   | TFunc (args, ret) ->
       "func " ^ String.concat ", " (List.map s_ty args) ^ s_ty ret
   | TClass p -> Printf.sprintf "Class<%s>" (s_path p)
+  | TTuple p -> "(" ^ String.concat "," (List.map s_ty p) ^ ")"
 
 let is_numeric = function
   | TPrim (TByte | TShort | TInt | TLong | TFloat | TDouble) -> true

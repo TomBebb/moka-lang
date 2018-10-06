@@ -14,9 +14,19 @@ class Main extends Base {
 	func new() {
 		super()
 	}
+	static func printBool(b: bool): void {
+		printf(if b "true\n" else "false\n")
+	}
 	static func main(): int {
 		var m = new Main()
-		printf("Hello, world! %d, %d, %d\n", m.a, m.b, m.c)
+		val c = m.c
+		var tup  = (1, false, true, c)
+		printf("Hello, world! %d, %d, %d\n", m.a, m.b, c)
+		printf("Tuple: %d, %d\n", tup[0], tup[3])
+		printBool(false)
+		printBool(true)
+		printBool(tup[1])
+		printBool(tup[2])
 		m.print()
 		0
 	}

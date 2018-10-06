@@ -55,20 +55,16 @@ let _ =
   let stream = lex_stream ch in
   Printexc.record_backtrace true ;
   let _ =
-    try
-      Some
-        ( print_endline "Parsing" ;
-          let mod_def = parse_mod stream in
-          print_endline "Typing" ;
-          let typed = Typer.type_mod typer mod_def in
-          print_endline "Pre Generating" ;
-          let _ = Codegen.pre_gen_mod gen typed in
-          Llvm.dump_module gen.gen_mod ;
-          print_endline "Generating" ;
-          let _ = Codegen.gen_mod gen typed in
-          Codegen.build gen !output !opt_level )
-    with e ->
-      Printf.eprintf "error: %s\n" (Exn.to_string e) ;
-      raise e
+    Some
+      ( print_endline "Parsing" ;
+        let mod_def = parse_mod stream in
+        print_endline (s_module mod_def) ;
+        print_endline "Typing" ;
+        let typed = Typer.type_mod typer mod_def in
+        print_endline "Pre Generating" ;
+        let _ = Codegen.pre_gen_mod gen typed in
+        print_endline "Generating" ;
+        let _ = gen_mod gen typed in
+        build gen !output !opt_level )
   in
   ()
