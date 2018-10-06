@@ -38,6 +38,7 @@ let span_v (v, _) = v
 type variability = Variable | Constant
 
 type expr_def =
+  | ECast of expr * ty
   | EThis
   | ESuper
   | EConst of const
@@ -67,7 +68,13 @@ type member_kind =
   | MFunc of param list * ty * expr
   | MConstr of param list * expr
 
-type member_mod = MStatic | MPublic | MPrivate | MExtern
+type member_mod =
+  | MStatic
+  | MPublic
+  | MPrivate
+  | MExtern
+  | MVirtual
+  | MOverride
 
 type member_mods = member_mod Set.Poly.t
 
@@ -137,6 +144,7 @@ let inner_assign = function
 
 let rec s_expr tabs (def, _) =
   match def with
+  | ECast (v, t) -> sprintf "%s as %s" (s_expr tabs v) (s_ty t)
   | ESuper -> "super"
   | EThis -> "this"
   | EConst c -> s_const c
@@ -196,9 +204,13 @@ let s_member ((mem, _) : member) : string =
         (s_expr "\t" body)
 
 let s_type_def ((def, _) : type_def) : string =
-  sprintf "%s %s {\n%s\n}"
-    (match def.ekind with EClass _ -> "class" | EStruct -> "struct")
-    (s_path def.epath)
+  let before, after =
+    match def.ekind with
+    | EClass {cextends= None; _} -> ("class", "")
+    | EClass {cextends= Some ext; _} -> ("class", " extends" ^ s_path ext)
+    | EStruct -> ("struct", "")
+  in
+  sprintf "%s %s%s {\n%s\n}" before (s_path def.epath) after
     (String.concat ~sep:"\n\t" (List.map ~f:s_member def.emembers))
 
 let s_module m =

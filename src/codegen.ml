@@ -202,6 +202,37 @@ let rec gen_defaults ctx ptr meta =
   in
   ()
 
+let rec gen_cast ctx (src : llvalue) (src_ty : ty) (target : ty) =
+  match (src_ty, target) with
+  | a, b when a = b -> src
+  | TPrim (TFloat | TDouble), TPrim (TInt | TShort | TByte | TLong) ->
+      build_fptosi src (gen_ty ctx target) "cast" ctx.gen_builder
+  | TPrim (TInt | TShort | TByte | TLong), TPrim (TFloat | TDouble) ->
+      build_sitofp src (gen_ty ctx target) "cast" ctx.gen_builder
+  | TPrim (TInt | TShort | TByte | TLong), TPrim (TInt | TShort | TByte | TLong)
+    ->
+      build_intcast src (gen_ty ctx target) "cast" ctx.gen_builder
+  | TPrim (TFloat | TDouble), TPrim (TFloat | TDouble) ->
+      build_fpcast src (gen_ty ctx target) "cast" ctx.gen_builder
+  | TPath src_path, TPath _ -> (
+      let src_meta = Hashtbl.find_exn ctx.gen_typedefs src_path in
+      print_endline (string_of_lltype src_meta.dstruct) ;
+      match src_meta.dsuper with
+      | Some (super_path, super_ind) ->
+          printf "Super found\n" ;
+          Out_channel.flush stdout ;
+          gen_cast ctx
+            (build_struct_gep src super_ind "super" ctx.gen_builder)
+            (TPath super_path) target
+      | _ ->
+          raise
+            (Failure
+               (sprintf "Cannot cast %s to %s (no super)" (s_ty src_ty)
+                  (s_ty target))) )
+  | _ ->
+      raise
+        (Failure (sprintf "Cannot cast %s to %s" (s_ty src_ty) (s_ty target)))
+
 let rec gen_expr (ctx : gen_ctx) ((def, pos) : ty_expr) : llvalue =
   let rec gen_expr_lhs ctx (def, pos) =
     match def.edef with
@@ -232,6 +263,10 @@ let rec gen_expr (ctx : gen_ctx) ((def, pos) : ty_expr) : llvalue =
   match def.edef with
   | TEConst c -> gen_const ctx c
   | TEThis -> get "unresolved this" ctx.gen_this
+  | TECast (v, t) ->
+      let v_ty = ty_of v in
+      let v = gen_expr ctx v in
+      gen_cast ctx v v_ty t
   | TESuper -> (
       let this = get "unresolved this" ctx.gen_this in
       let meta =

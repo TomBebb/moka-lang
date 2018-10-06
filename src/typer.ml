@@ -3,6 +3,7 @@ open Type
 open Core_kernel
 
 type ty_expr_def =
+  | TECast of ty_expr * ty
   | TEThis
   | TESuper
   | TEConst of const
@@ -69,6 +70,8 @@ type error_kind =
   | NoMatchingConstr of path * ty list
   | FunctionArgsMismatch of expr * ty list * ty list
   | NoReturn
+  | CannotCastTo of ty
+  | VoidVar
 
 let error_msg = function
   | UnresolvedIdent s -> sprintf "Failed to resolve identifier '%s'" s
@@ -100,6 +103,8 @@ let error_msg = function
         (String.concat ~sep:", " (List.map ~f:s_ty takes))
         (String.concat ~sep:", " (List.map ~f:s_ty got))
   | NoReturn -> "No return"
+  | CannotCastTo t -> "Cannot cast to " ^ s_ty t
+  | VoidVar -> "Variables and constants cannot be void"
 
 exception Error of error_kind span
 
@@ -154,8 +159,9 @@ let ty_of tex =
   let meta, _ = tex in
   meta.ety
 
-let set_var ctx name ty v =
-  ignore (Hashtbl.add (Stack.top_exn ctx.tvars) ~key:name ~data:(ty, v))
+let set_var ctx name var ty =
+  printf "var '%s': %s" name (s_ty ty) ;
+  ignore (Hashtbl.add (Stack.top_exn ctx.tvars) ~key:name ~data:(var, ty))
 
 let rec as_pack ctx ex =
   let edef, _ = ex in
@@ -187,6 +193,19 @@ let find_matching_constr ctx path args pos =
   in
   unwrap_or_err constr (Error (NoMatchingConstr (path, args), pos))
 
+let rec can_cast ctx source target =
+  match (source, target) with
+  | a, b when is_numeric a && is_numeric b -> true
+  | TPath a, TPath b -> (
+      let a_def, _ = Hashtbl.find_exn ctx.ttypedefs a in
+      match a_def.ekind with
+      | EClass {cextends= Some super; cimplements} ->
+          List.mem cimplements b ~equal:(fun a b -> a = b)
+          || super = b
+          || can_cast ctx source (TPath super)
+      | _ -> false )
+  | _ -> false
+
 let rec type_expr ctx ex =
   let edef, pos = ex in
   let mk def ty =
@@ -209,6 +228,12 @@ let rec type_expr ctx ex =
   in
   match edef with
   | EConst c -> mk (TEConst c) (TPrim (type_of_const c))
+  | ECast (v, t) ->
+      let v = type_expr ctx v in
+      ( match (ty_of v, t) with
+      | a, b when can_cast ctx a b -> ()
+      | _ -> raise (Error (CannotCastTo t, pos)) ) ;
+      mk (TECast (v, t)) t
   | EThis ->
       let path = unwrap_or_err ctx.tthis (Error (UnresolvedThis, pos)) in
       mk TEThis (TPath path)
@@ -239,7 +264,12 @@ let rec type_expr ctx ex =
   | EVar (vari, t, name, v) ->
       let v = type_expr ctx v in
       set_var ctx name vari (ty_of v) ;
-      mk (TEVar (vari, t, name, v)) (TPrim TVoid)
+      ( match t with
+      | Some t when ty_of v <> t -> raise (Error (Expected (t, ty_of v), pos))
+      | _ -> () ) ;
+      if ty_of v <> TPrim TVoid then
+        mk (TEVar (vari, t, name, v)) (TPrim TVoid)
+      else raise (Error (VoidVar, pos))
   | EParen inner ->
       let inner = type_expr ctx inner in
       mk (TEParen inner) (ty_of inner)
@@ -390,8 +420,11 @@ and type_of_member _ (def, pos) =
 
 and find_var ctx name pos =
   let res : (variability * ty) option ref = ref None in
+  print_endline "dumping stack" ;
   Stack.iter
     ~f:(fun tbl ->
+      Hashtbl.iteri tbl ~f:(fun ~key:name ~data:(_, v) ->
+          print_endline (name ^ ":" ^ s_ty v) ) ;
       if !res <> None then ()
       else
         match Hashtbl.find tbl name with Some v -> res := Some v | None -> ()
@@ -471,6 +504,7 @@ let type_mod ctx m =
 
 let rec s_ty_expr tabs (meta, _) =
   match meta.edef with
+  | TECast (v, t) -> sprintf "%s as %s" (s_ty_expr tabs v) (s_ty t)
   | TESuper -> "super"
   | TEThis -> "this"
   | TEConst c -> s_const c

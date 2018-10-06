@@ -210,6 +210,10 @@ let rec parse_expr kind tks =
         let _ = Stream.next tks in
         let other = parse_expr "binary operand" tks in
         parse_after_expr (mk (EBinOp (op, base, other)) base other) tks
+    | Some (TKeyword KAs, _) ->
+        ignore (Stream.next tks) ;
+        let target = parse_ty tks in
+        parse_after_expr (mk (ECast (base, target)) base base) tks
     | _ -> base
   in
   let base = parse_base_expr tks in
@@ -236,6 +240,12 @@ let parse_atts tks =
 
 let parse_member_mod tks =
   match Stream.peek tks with
+  | Some (TKeyword KVirtual, _) ->
+      let _ = Stream.next tks in
+      Some MVirtual
+  | Some (TKeyword KOverride, _) ->
+      let _ = Stream.next tks in
+      Some MOverride
   | Some (TKeyword KExtern, _) ->
       let _ = Stream.next tks in
       Some MExtern

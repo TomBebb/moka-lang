@@ -22,6 +22,8 @@ type keyword =
   | KStatic
   | KPublic
   | KPrivate
+  | KVirtual
+  | KOverride
   (* control flow *)
   | KIf
   | KElse
@@ -31,6 +33,7 @@ type keyword =
   | KContinue
   | KReturn
   (* special *)
+  | KAs
   | KThis
   | KNull
 
@@ -75,6 +78,8 @@ let s_keyword = function
   | KStatic -> "static"
   | KPublic -> "public"
   | KPrivate -> "private"
+  | KVirtual -> "virtual"
+  | KOverride -> "override"
   (* control flow *)
   | KIf -> "if"
   | KElse -> "else"
@@ -84,6 +89,7 @@ let s_keyword = function
   | KContinue -> "continue"
   | KReturn -> "return"
   (* special *)
+  | KAs -> "as"
   | KThis -> "this"
   | KNull -> "null"
 
