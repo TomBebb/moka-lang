@@ -13,10 +13,12 @@ type primitive_ty =
   | TDouble
   | TString
 
+type func_kind = FNormal | FVarArgs
+
 type ty =
   | TPrim of primitive_ty
   | TPath of path
-  | TFunc of ty list * ty
+  | TFunc of ty list * ty * func_kind
   | TClass of path
   | TTuple of ty list
 
@@ -38,7 +40,7 @@ let s_path (parts, name) = String.concat "." (parts @ [name])
 let rec s_ty = function
   | TPrim p -> s_primitive_ty p
   | TPath p -> s_path p
-  | TFunc (args, ret) ->
+  | TFunc (args, ret, _) ->
       "func " ^ String.concat ", " (List.map s_ty args) ^ s_ty ret
   | TClass p -> Printf.sprintf "Class<%s>" (s_path p)
   | TTuple p -> "(" ^ String.concat "," (List.map s_ty p) ^ ")"

@@ -145,8 +145,9 @@ let tbl_find tbl key fail =
 
 let rec gen_ty ctx ty =
   match ty with
-  | TFunc (args, ret) ->
-      Llvm.function_type (gen_ty ctx ret)
+  | TFunc (args, ret, kind) ->
+      (if kind = FVarArgs then var_arg_function_type else Llvm.function_type)
+        (gen_ty ctx ret)
         (Array.of_list (List.map args ~f:(gen_ty ctx)))
   | TPrim TVoid -> Llvm.void_type ctx.gen_ctx
   | TPrim TBool -> Llvm.i1_type ctx.gen_ctx

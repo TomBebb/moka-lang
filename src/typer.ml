@@ -67,7 +67,7 @@ type error_kind =
   | CannotCall of ty
   | InvalidLHS
   | NoMatchingConstr of path * ty list
-  | NoMatchingMeth of path * string * ty list
+  | FunctionArgsMismatch of expr * ty list * ty list
   | NoReturn
 
 let error_msg = function
@@ -95,9 +95,10 @@ let error_msg = function
       sprintf "No matching constructor found on '%s' taking args: %s"
         (s_path p)
         (String.concat ~sep:", " (List.map ~f:s_ty ts))
-  | NoMatchingMeth (p, n, ts) ->
-      sprintf "No matching method '%s.%s' taking args: %s" (s_path p) n
-        (String.concat ~sep:", " (List.map ~f:s_ty ts))
+  | FunctionArgsMismatch (func, takes, got) ->
+      sprintf "Function '%s' expects arguments %s but got %s" (s_expr "" func)
+        (String.concat ~sep:", " (List.map ~f:s_ty takes))
+        (String.concat ~sep:", " (List.map ~f:s_ty got))
   | NoReturn -> "No return"
 
 exception Error of error_kind span
@@ -313,13 +314,22 @@ let rec type_expr ctx ex =
       let arg_tys = List.map ~f:ty_of args in
       let _ = find_matching_constr ctx extends arg_tys pos in
       mk (TECall (super, args)) (TPrim TVoid)
-  | ECall (func, args) ->
-      let func = type_expr ctx func in
+  | ECall (func_d, args) ->
+      let func = type_expr ctx func_d in
       let args = List.map ~f:(type_expr ctx) args in
       mk
         (TECall (func, args))
         ( match ty_of func with
-        | TFunc (_, ret) -> ret
+        | TFunc (params, ret, FNormal) ->
+            let pargs = List.map args ~f:ty_of in
+            if params <> pargs then
+              raise (Error (FunctionArgsMismatch (func_d, params, pargs), pos))
+            else ret
+        | TFunc (params, ret, FVarArgs) ->
+            let pargs = List.map args ~f:ty_of in
+            if params <> List.sub pargs ~pos:0 ~len:(List.length params) then
+              raise (Error (FunctionArgsMismatch (func_d, params, pargs), pos))
+            else ret
         | t -> raise (Error (CannotCall t, pos)) )
   | EIf (cond, if_e, None) ->
       let cond = type_expr ctx cond in
@@ -366,9 +376,17 @@ and type_of_member _ (def, pos) =
   | MVar (v, None, Some c) -> (v, TPrim (type_of_const c))
   | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
   | MFunc (params, ret, _) ->
-      (Constant, TFunc (List.map ~f:(fun par -> par.ptype) params, ret))
+      ( Constant
+      , TFunc
+          ( List.map ~f:(fun par -> par.ptype) params
+          , ret
+          , if Hashtbl.find def.matts "CallConv" = Some (CString "vararg") then
+              FVarArgs
+            else FNormal ) )
   | MConstr (params, _) ->
-      (Constant, TFunc (List.map ~f:(fun par -> par.ptype) params, TPrim TVoid))
+      ( Constant
+      , TFunc (List.map ~f:(fun par -> par.ptype) params, TPrim TVoid, FNormal)
+      )
 
 and find_var ctx name pos =
   let res : (variability * ty) option ref = ref None in
@@ -391,7 +409,7 @@ and find_var ctx name pos =
 and type_of_const = function
   | CInt _ -> TInt
   | CFloat _ -> TFloat
-  | CString _ -> TShort
+  | CString _ -> TString
   | CBool _ -> TBool
   | CNull -> TVoid
 
