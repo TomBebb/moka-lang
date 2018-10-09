@@ -108,15 +108,20 @@ let rec gen_ty ctx ty =
       struct_type ctx.gen_ctx (Array.of_list (List.map ~f:(gen_ty ctx) mems))
   | _ -> raise (Failure "This type cannot be generated")
 
-let rec resolve_pointer ctx ptr =
+let rec resolve_pointer ctx ptr obj_path =
   let ptr_ty = type_of ptr in
   assert (classify_type ptr_ty = TypeKind.Pointer) ;
-  if classify_type (element_type ptr_ty) = TypeKind.Pointer then
-    resolve_pointer ctx (build_load ptr "ptr" ctx.gen_builder)
-  else ptr
+  match classify_type (element_type ptr_ty) with
+  | Pointer ->
+      resolve_pointer ctx (build_load ptr "ptr" ctx.gen_builder) obj_path
+  | Integer | Void ->
+      build_pointercast ptr
+        (gen_ty ctx (TPath obj_path))
+        (s_path obj_path) ctx.gen_builder
+  | _ -> ptr
 
 let rec find_member ctx obj_path obj_ptr name =
-  let ptr = resolve_pointer ctx obj_ptr in
+  let ptr = resolve_pointer ctx obj_ptr obj_path in
   assert (classify_type (element_type (type_of ptr)) = Struct) ;
   let meta = Hashtbl.find_exn ctx.gen_typedefs obj_path in
   match Hashtbl.find meta.dfield_indicies name with
@@ -156,20 +161,16 @@ let set_var ctx name value =
 
 let rec find_method ctx path obj_ptr name =
   let meta = Hashtbl.find_exn ctx.gen_typedefs path in
-  let ptr = ref (resolve_pointer ctx obj_ptr) in
-  assert (classify_type (type_of !ptr) = Pointer) ;
-  if classify_type (element_type (type_of !ptr)) = Integer then
-    ptr :=
-      build_pointercast !ptr (gen_ty ctx (TPath path)) (s_path path)
-        ctx.gen_builder ;
-  assert (classify_type (element_type (type_of !ptr)) = Struct) ;
+  let ptr = resolve_pointer ctx obj_ptr path in
+  assert (classify_type (type_of ptr) = Pointer) ;
+  assert (classify_type (element_type (type_of ptr)) = Struct) ;
   match Hashtbl.find meta.dmethods name with
-  | Some m -> (!ptr, m)
+  | Some m -> (ptr, m)
   | None -> (
     match meta.dsuper with
     | Some (super_path, super_ind) ->
         let super_ptr =
-          build_struct_gep !ptr super_ind "super" ctx.gen_builder
+          build_struct_gep ptr super_ind "super" ctx.gen_builder
         in
         find_method ctx super_path super_ptr name
     | _ -> raise (Failure "method not found") )
