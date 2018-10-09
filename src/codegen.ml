@@ -15,12 +15,15 @@ exception Error of error_kind span
 
 type gen_def_meta =
   { dstruct: lltype
-  ; dfield_indicies: (string, int) Hashtbl.t
+  ; dfield_indices: (string, int) Hashtbl.t
   ; dstatics: (string, llvalue) Hashtbl.t
   ; dmethods: (string, llvalue) Hashtbl.t
   ; dsuper: (path * int) option
   ; dkind: type_def_kind
-  ; dfield_defaults: (string, llvalue) Hashtbl.t }
+  ; dfield_defaults: (string, llvalue) Hashtbl.t
+  ; mutable dvtable: llvalue option
+  ; dvtable_indices: (string, int) Hashtbl.t
+  ; dvtable_index: int }
 
 type gen_loop_meta = {lafter: llbasicblock; lstart: llbasicblock}
 
@@ -124,7 +127,7 @@ let rec find_member ctx obj_path obj_ptr name =
   let ptr = resolve_pointer ctx obj_ptr obj_path in
   assert (classify_type (element_type (type_of ptr)) = Struct) ;
   let meta = Hashtbl.find_exn ctx.gen_typedefs obj_path in
-  match Hashtbl.find meta.dfield_indicies name with
+  match Hashtbl.find meta.dfield_indices name with
   | Some ind -> Some (build_struct_gep ptr ind name ctx.gen_builder)
   | _ -> (
     match meta.dsuper with
@@ -198,9 +201,23 @@ let gc_malloc ctx ty name =
   build_pointercast ptr (pointer_type ty) name ctx.gen_builder
 
 let rec gen_defaults ctx ptr meta =
+  let _ =
+    match meta.dvtable with
+    | Some vtable ->
+        let vtable_field_ptr =
+          ref
+            (build_struct_gep ptr meta.dvtable_index "vtable" ctx.gen_builder)
+        in
+        vtable_field_ptr :=
+          build_pointercast !vtable_field_ptr
+            (pointer_type (type_of vtable))
+            "vtable_ptr" ctx.gen_builder ;
+        ignore (build_store vtable !vtable_field_ptr ctx.gen_builder)
+    | _ -> ()
+  in
   Hashtbl.iter_keys meta.dfield_defaults ~f:(fun name ->
       let con = Hashtbl.find_exn meta.dfield_defaults name in
-      let ind = Hashtbl.find_exn meta.dfield_indicies name in
+      let ind = Hashtbl.find_exn meta.dfield_indices name in
       let field_ptr = build_struct_gep ptr ind name ctx.gen_builder in
       ignore (build_store con field_ptr ctx.gen_builder) ) ;
   let _ =
@@ -481,6 +498,8 @@ let pre_gen_typedef ctx (meta, _) =
   let statics = String.Table.create () in
   let methods = String.Table.create () in
   let defaults = String.Table.create () in
+  let vtable_vals = ref [] in
+  let vtable_indices = String.Table.create () in
   ctx.gen_local_path <- Some meta.tepath ;
   (* generate fields *)
   List.iter
@@ -499,8 +518,9 @@ let pre_gen_typedef ctx (meta, _) =
           | None -> () )
       | _ -> () )
     meta.temembers ;
-  ignore
-    ( match meta.tekind with
+  (* generate barebones definitions *)
+  let dmeta =
+    match meta.tekind with
     | EClass cl ->
         let extends =
           match cl.cextends with
@@ -512,36 +532,50 @@ let pre_gen_typedef ctx (meta, _) =
           | _ -> None
         in
         let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
+        let vtable_index = List.length !types in
+        types := !types @ [pointer_type (i8_type ctx.gen_ctx)] ;
         struct_set_body gen (List.to_array !types) false ;
         let dmeta =
           { dstruct= gen
-          ; dfield_indicies= indices
+          ; dfield_indices= indices
           ; dstatics= statics
           ; dmethods= methods
           ; dsuper= extends
           ; dkind= meta.tekind
-          ; dfield_defaults= defaults }
+          ; dfield_defaults= defaults
+          ; dvtable= None
+          ; dvtable_indices= vtable_indices
+          ; dvtable_index= vtable_index }
         in
         ctx.gen_this_ty <- gen ;
-        Hashtbl.add ctx.gen_typedefs ~key:meta.tepath ~data:dmeta
+        ignore (Hashtbl.add ctx.gen_typedefs ~key:meta.tepath ~data:dmeta) ;
+        dmeta
     | EStruct ->
         let gen = named_struct_type ctx.gen_ctx (s_path meta.tepath) in
         struct_set_body gen (List.to_array !types) false ;
         let dmeta =
           { dstruct= gen
-          ; dfield_indicies= indices
+          ; dfield_indices= indices
           ; dstatics= statics
           ; dmethods= methods
           ; dsuper= None
           ; dkind= meta.tekind
-          ; dfield_defaults= defaults }
+          ; dfield_defaults= defaults
+          ; dvtable= None
+          ; dvtable_indices= vtable_indices
+          ; dvtable_index= -1 }
         in
         ctx.gen_this_ty <- gen ;
-        Hashtbl.add ctx.gen_typedefs ~key:meta.tepath ~data:dmeta ) ;
+        ignore (Hashtbl.add ctx.gen_typedefs ~key:meta.tepath ~data:dmeta) ;
+        dmeta
+  in
+  (* generate fields and methods *)
   List.iter
     ~f:(fun (field, _) ->
       let is_static = Set.mem field.tmmods MStatic in
       let is_extern = Set.mem field.tmmods MExtern in
+      let is_virtual = Set.mem field.tmmods MVirtual in
+      let is_override = Set.mem field.tmmods MOverride in
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
       | TMVar (Constant, _, Some c) when is_static ->
@@ -554,7 +588,9 @@ let pre_gen_typedef ctx (meta, _) =
           let global = Llvm.declare_global llty name ctx.gen_mod in
           ignore (Hashtbl.add statics ~key:field.tmname ~data:global)
       | TMVar (_, _, _) -> ()
-      | TMFunc ([], TPrim TInt, _) when is_static && field.tmname = "main" ->
+      | TMFunc ([], TPrim TInt, _)
+        when is_static && field.tmname = "main" && (not is_virtual)
+             && not is_override ->
           ()
       | TMFunc (params, ret, _) ->
           let llpars =
@@ -580,6 +616,10 @@ let pre_gen_typedef ctx (meta, _) =
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
           if not is_extern then set_function_call_conv callconv func ;
+          if is_virtual then (
+            let index = List.length !vtable_vals in
+            vtable_vals := !vtable_vals @ [func] ;
+            ignore (Hashtbl.add vtable_indices ~key:field.tmname ~data:index) ) ;
           ignore
             (Hashtbl.add
                (if is_static then statics else methods)
@@ -598,7 +638,11 @@ let pre_gen_typedef ctx (meta, _) =
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
           ignore (Hashtbl.add statics ~key:field.tmname ~data:func) )
     meta.temembers ;
-  meta.temembers
+  let vtable_val = const_struct ctx.gen_ctx (Array.of_list !vtable_vals) in
+  let vtable_ptr =
+    define_global (s_path meta.tepath ^ "__vtable__") vtable_val ctx.gen_mod
+  in
+  dmeta.dvtable <- Some vtable_ptr
 
 let gen_typedef ctx (meta, _) =
   ctx.gen_local_path <- Some meta.tepath ;
