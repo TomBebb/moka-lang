@@ -82,6 +82,32 @@ let maybe_load ctx name v should_load =
   in
   if should_load && not is_func then build_load v name ctx.gen_builder else v
 
+let rec gen_ty ctx ty =
+  match ty with
+  | TFunc (args, ret, kind) ->
+      (if kind = FVarArgs then var_arg_function_type else Llvm.function_type)
+        (gen_ty ctx ret)
+        (Array.of_list (List.map args ~f:(gen_ty ctx)))
+  | TPrim TVoid -> Llvm.void_type ctx.gen_ctx
+  | TPrim TBool -> Llvm.i1_type ctx.gen_ctx
+  | TPrim TByte -> Llvm.i8_type ctx.gen_ctx
+  | TPrim TShort -> Llvm.i16_type ctx.gen_ctx
+  | TPrim TInt -> Llvm.i32_type ctx.gen_ctx
+  | TPrim TLong -> Llvm.i64_type ctx.gen_ctx
+  | TPrim TFloat -> Llvm.float_type ctx.gen_ctx
+  | TPrim TDouble -> Llvm.double_type ctx.gen_ctx
+  | TPrim TString -> Llvm.pointer_type (i8_type ctx.gen_ctx)
+  | TPath path ->
+      let elem =
+        match Hashtbl.find ctx.gen_typedefs path with
+        | Some def -> def.dstruct
+        | _ -> i8_type ctx.gen_ctx
+      in
+      pointer_type elem
+  | TTuple mems ->
+      struct_type ctx.gen_ctx (Array.of_list (List.map ~f:(gen_ty ctx) mems))
+  | _ -> raise (Failure "This type cannot be generated")
+
 let rec resolve_pointer ctx ptr =
   let ptr_ty = type_of ptr in
   assert (classify_type ptr_ty = TypeKind.Pointer) ;
@@ -130,39 +156,23 @@ let set_var ctx name value =
 
 let rec find_method ctx path obj_ptr name =
   let meta = Hashtbl.find_exn ctx.gen_typedefs path in
-  let ptr = resolve_pointer ctx obj_ptr in
+  let ptr = ref (resolve_pointer ctx obj_ptr) in
+  assert (classify_type (type_of !ptr) = Pointer) ;
+  if classify_type (element_type (type_of !ptr)) = Integer then
+    ptr :=
+      build_pointercast !ptr (gen_ty ctx (TPath path)) (s_path path)
+        ctx.gen_builder ;
+  assert (classify_type (element_type (type_of !ptr)) = Struct) ;
   match Hashtbl.find meta.dmethods name with
-  | Some m -> (ptr, m)
+  | Some m -> (!ptr, m)
   | None -> (
     match meta.dsuper with
-    | Some (s, ind) ->
-        let super = build_struct_gep ptr ind "super" ctx.gen_builder in
-        find_method ctx s super name
+    | Some (super_path, super_ind) ->
+        let super_ptr =
+          build_struct_gep !ptr super_ind "super" ctx.gen_builder
+        in
+        find_method ctx super_path super_ptr name
     | _ -> raise (Failure "method not found") )
-
-let tbl_find tbl key fail =
-  match Hashtbl.find tbl key with Some v -> v | None -> raise (Failure fail)
-
-let rec gen_ty ctx ty =
-  match ty with
-  | TFunc (args, ret, kind) ->
-      (if kind = FVarArgs then var_arg_function_type else Llvm.function_type)
-        (gen_ty ctx ret)
-        (Array.of_list (List.map args ~f:(gen_ty ctx)))
-  | TPrim TVoid -> Llvm.void_type ctx.gen_ctx
-  | TPrim TBool -> Llvm.i1_type ctx.gen_ctx
-  | TPrim TByte -> Llvm.i8_type ctx.gen_ctx
-  | TPrim TShort -> Llvm.i16_type ctx.gen_ctx
-  | TPrim TInt -> Llvm.i32_type ctx.gen_ctx
-  | TPrim TLong -> Llvm.i64_type ctx.gen_ctx
-  | TPrim TFloat -> Llvm.float_type ctx.gen_ctx
-  | TPrim TDouble -> Llvm.double_type ctx.gen_ctx
-  | TPrim TString -> Llvm.pointer_type (i8_type ctx.gen_ctx)
-  | TPath path ->
-      Llvm.pointer_type (tbl_find ctx.gen_typedefs path (s_path path)).dstruct
-  | TTuple mems ->
-      struct_type ctx.gen_ctx (Array.of_list (List.map ~f:(gen_ty ctx) mems))
-  | _ -> raise (Failure "This type cannot be generated")
 
 let gen_const ctx = function
   | CInt i -> Llvm.const_int (gen_ty ctx (TPrim TInt)) i
