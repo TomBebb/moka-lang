@@ -167,6 +167,11 @@ let rec find_method ctx path obj_ptr name =
   let ptr = resolve_pointer ctx obj_ptr path in
   assert (classify_type (type_of ptr) = Pointer) ;
   assert (classify_type (element_type (type_of ptr)) = Struct) ;
+  match Hashtbl.find meta.dvtable_indices name with
+  | Some ind ->
+    let vtable_ptr = build_struct_gep ptr meta.dvtable_index in
+    build_struct_gep vtable_ptr ind name ctx.gen_builder
+    | _ -> ( 
   match Hashtbl.find meta.dmethods name with
   | Some m -> (ptr, m)
   | None -> (
@@ -176,7 +181,7 @@ let rec find_method ctx path obj_ptr name =
           build_struct_gep ptr super_ind "super" ctx.gen_builder
         in
         find_method ctx super_path super_ptr name
-    | _ -> raise (Failure "method not found") )
+    | _ -> raise (Failure "method not found") ))
 
 let gen_const ctx = function
   | CInt i -> Llvm.const_int (gen_ty ctx (TPrim TInt)) i
