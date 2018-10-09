@@ -169,19 +169,36 @@ let rec find_method ctx path obj_ptr name =
   assert (classify_type (element_type (type_of ptr)) = Struct) ;
   match Hashtbl.find meta.dvtable_indices name with
   | Some ind ->
-    let vtable_ptr = build_struct_gep ptr meta.dvtable_index in
-    build_struct_gep vtable_ptr ind name ctx.gen_builder
-    | _ -> ( 
-  match Hashtbl.find meta.dmethods name with
-  | Some m -> (ptr, m)
-  | None -> (
-    match meta.dsuper with
-    | Some (super_path, super_ind) ->
-        let super_ptr =
-          build_struct_gep ptr super_ind "super" ctx.gen_builder
-        in
-        find_method ctx super_path super_ptr name
-    | _ -> raise (Failure "method not found") ))
+      let vtable_ptr_ptr =
+        build_struct_gep ptr meta.dvtable_index "vtable_ptr" ctx.gen_builder
+      in
+      let vtable_ptr =
+        ref (build_load vtable_ptr_ptr "vtable" ctx.gen_builder)
+      in
+      vtable_ptr :=
+        build_pointercast !vtable_ptr
+          (type_of (get "no vtable" meta.dvtable))
+          "vtable2" ctx.gen_builder ;
+      let func_ptr =
+        ref (build_struct_gep !vtable_ptr ind name ctx.gen_builder)
+      in
+      while
+        classify_type (element_type (type_of !func_ptr)) = TypeKind.Pointer
+      do
+        func_ptr := build_load !func_ptr name ctx.gen_builder
+      done ;
+      (ptr, !func_ptr)
+  | _ -> (
+    match Hashtbl.find meta.dmethods name with
+    | Some m -> (ptr, m)
+    | None -> (
+      match meta.dsuper with
+      | Some (super_path, super_ind) ->
+          let super_ptr =
+            build_struct_gep ptr super_ind "super" ctx.gen_builder
+          in
+          find_method ctx super_path super_ptr name
+      | _ -> raise (Failure "method not found") ) )
 
 let gen_const ctx = function
   | CInt i -> Llvm.const_int (gen_ty ctx (TPrim TInt)) i
@@ -446,6 +463,11 @@ let rec gen_expr (ctx : gen_ctx) ((def, pos) : ty_expr) : llvalue =
             | TPath path ->
                 let obj = gen_expr_lhs ctx o in
                 let ptr, meth = find_method ctx path obj f in
+                assert (classify_type (type_of meth) = TypeKind.Pointer) ;
+                print_endline (string_of_lltype (type_of meth)) ;
+                assert (
+                  classify_type (element_type (type_of meth))
+                  = TypeKind.Function ) ;
                 args := [ptr] @ !args ;
                 meth
             | _ -> raise (Failure (sprintf "no path for %s" (s_ty obj_t))) )
