@@ -223,6 +223,7 @@ let gc_malloc ctx ty name =
   build_pointercast ptr (pointer_type ty) name ctx.gen_builder
 
 let rec gen_defaults ctx ptr meta =
+  (* make vtable field point to default *)
   let _ =
     match meta.dvtable with
     | Some vtable ->
@@ -643,10 +644,11 @@ let pre_gen_typedef ctx (meta, _) =
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
           if not is_extern then set_function_call_conv callconv func ;
-          if is_virtual then (
+          if is_virtual then begin
             let index = List.length !vtable_vals in
             vtable_vals := !vtable_vals @ [func] ;
-            ignore (Hashtbl.add vtable_indices ~key:field.tmname ~data:index) ) ;
+            ignore (Hashtbl.add vtable_indices ~key:field.tmname ~data:index)
+          end;
           ignore
             (Hashtbl.add
                (if is_static then statics else methods)
