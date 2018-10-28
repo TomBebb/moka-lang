@@ -337,14 +337,7 @@ let parse_member tks =
       let ex =
         if next_is tks (TBinOp OpAssign) then
           let _ = Stream.next tks in
-          let tk, pos = Stream.next tks in
-          let c =
-            match tk with
-            | TConst cn -> cn
-            | def ->
-                raise
-                  (Error (mk_one (Unexpected (def, "member constant")) pos))
-          in
+          let c = parse_expr "member expression" tks in
           Some c
         else None
       in

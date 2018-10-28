@@ -32,7 +32,7 @@ and ty_expr_meta = {edef: ty_expr_def; ety: ty}
 and ty_expr = ty_expr_meta span
 
 type ty_member_kind =
-  | TMVar of variability * ty * const option
+  | TMVar of variability * ty * ty_expr option
   | TMFunc of param list * ty * ty_expr
   | TMConstr of param list * ty_expr
 
@@ -419,10 +419,11 @@ let rec type_expr ctx ex =
       let v = match v with Some v -> Some (type_expr ctx v) | None -> None in
       mk (TEReturn v) (TPrim TVoid)
 
-and type_of_member _ (def, pos) =
+and type_of_member ctx (def, pos) =
+  ctx.tin_static <- Set.mem def.mmods MStatic;
   match def.mkind with
   | MVar (v, Some ty, _) -> (v, ty)
-  | MVar (v, None, Some c) -> (v, TPrim (type_of_const c))
+  | MVar (v, None, Some c) -> (v, ty_of (type_expr ctx c))
   | MVar _ -> raise (Error (UnresolvedFieldType def.mname, pos))
   | MFunc (params, ret, _) ->
       ( Constant
@@ -473,7 +474,9 @@ let type_member ctx (def, pos) =
   let kind =
     match def.mkind with
     | MVar (v, Some ty, None) -> TMVar (v, ty, None)
-    | MVar (v, _, Some c) -> TMVar (v, TPrim (type_of_const c), Some c)
+    | MVar (v, _, Some c) ->
+      let e = type_expr ctx c in
+      TMVar (v, ty_of e, Some e)
     | MVar (_, None, None) ->
         raise (Error (UnresolvedFieldType def.mname, pos))
     | MFunc (params, ret, body) ->
@@ -574,7 +577,7 @@ let s_ty_member ((mem, _) : ty_member) : string =
   match mem.tmkind with
   | TMVar (vr, ty, va) ->
       sprintf "%s %s: %s %s" (s_var vr) mem.tmname (s_ty ty)
-        (match va with Some v -> " = " ^ s_const v | _ -> "")
+        (match va with Some v -> " = " ^ s_ty_expr "" v | _ -> "")
   | TMFunc (pars, ret, body) ->
       sprintf "func %s(%s): %s %s" mem.tmname
         (String.concat ~sep:"," (List.map ~f:s_param pars))

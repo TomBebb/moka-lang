@@ -600,7 +600,7 @@ let pre_gen_typedef ctx (meta, _) =
           match def with
           | Some v ->
               ignore
-                (Hashtbl.add defaults ~key:field.tmname ~data:(gen_const ctx v))
+                (Hashtbl.add defaults ~key:field.tmname ~data:(gen_expr ctx v))
           | None -> () )
       | _ -> () )
     meta.temembers ;
@@ -665,7 +665,7 @@ let pre_gen_typedef ctx (meta, _) =
       let name = member_name ctx meta.tepath field in
       match field.tmkind with
       | TMVar (Constant, _, Some c) when is_static ->
-          let v = gen_const ctx c in
+          let v = gen_expr ctx c in
           let global = Llvm.define_global name v ctx.gen_mod in
           set_unnamed_addr true global ;
           ignore (Hashtbl.add statics ~key:field.tmname ~data:global)
@@ -674,6 +674,7 @@ let pre_gen_typedef ctx (meta, _) =
           let global = Llvm.declare_global llty name ctx.gen_mod in
           ignore (Hashtbl.add statics ~key:field.tmname ~data:global)
       | TMVar (_, _, _) -> ()
+      (* ignore main function *)
       | TMFunc ([], TPrim TInt, _)
         when is_static && field.tmname = "main" && (not is_virtual)
              && not is_override ->
@@ -702,6 +703,7 @@ let pre_gen_typedef ctx (meta, _) =
           in
           let func = Llvm.declare_function name sig_ty ctx.gen_mod in
           if not is_extern then set_function_call_conv callconv func ;
+          (* if method is virtual, then insert this function into vtable *)
           if is_virtual then begin
             let index = List.length !vtable_vals in
             vtable_vals := !vtable_vals @ [func] ;
@@ -747,7 +749,7 @@ let gen_typedef ctx (meta, _) =
           in
           set_global_constant true global ;
           set_externally_initialized false global ;
-          set_initializer global (gen_const ctx c)
+          set_initializer global (gen_expr ctx c)
       | TMFunc (args, ret, ex) when not (Set.mem field.tmmods MExtern) ->
           let is_main = is_static && field.tmname = "main" && args = [] in
           let func, entry =

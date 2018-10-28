@@ -65,7 +65,7 @@ and expr = expr_def span
 type param = {pname: string; ptype: ty}
 
 type member_kind =
-  | MVar of variability * ty option * const option
+  | MVar of variability * ty option * expr option
   | MFunc of param list * ty * expr
   | MConstr of param list * expr
 
@@ -194,7 +194,7 @@ let s_member ((mem, _) : member) : string =
   | MVar (vr, ty, va) ->
       sprintf "%s %s %s %s" (s_var vr) mem.mname
         (match ty with Some t -> ":" ^ s_ty t | _ -> "")
-        (match va with Some v -> " = " ^ s_const v | _ -> "")
+        (match va with Some v -> " = " ^ s_expr "" v | _ -> "")
   | MFunc (pars, ret, body) ->
       sprintf "func %s(%s): %s %s" mem.mname
         (String.concat ~sep:"," (List.map ~f:s_param pars))
