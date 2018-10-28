@@ -1,3 +1,4 @@
+(** Main functionality *)
 open Ast
 open Lex
 open Parser
@@ -29,11 +30,14 @@ let main_source = ref None
 
 let opt_level = ref 0
 
+let class_path = ref "./"
+
 let _ =
   let speclist =
     [ ("-v", Arg.Set verbose, "Turns on verbose mode")
     ; ("-o", Arg.Set_string output, "Sets output executable")
     ; ("-O", Arg.Set_int opt_level, "Set optimization level (0-3)")
+    ; ("-cp", Arg.Set_string class_path, "Set class path")
     ; ( "-m"
       , Arg.String
           (fun s ->

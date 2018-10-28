@@ -1,3 +1,5 @@
+(** Parses a stream of tokens as a source file AST *)
+
 open Ast
 open Token
 open Type
@@ -21,6 +23,7 @@ let error_msg = function
 
 exception Error of error_kind span
 
+(** Check if next token in stream [tks] if [want] *)
 let next_is tks want =
   match Stream.peek tks with Some (def, _) -> def = want | _ -> false
 
@@ -31,12 +34,14 @@ let mk ex (_, first) (_, last) = mk_pos ex first last
 
 let mk_one def pos = (def, pos)
 
+(** Expect an identifier in token stream [tks], or raise an error*)
 let expect_ident tks =
   let tk = Stream.next tks in
   match tk with
   | TIdent id, pos -> mk_one id pos
   | def, _ -> raise (Error (mk (Unexpected (def, "identifier")) tk tk))
 
+(** Expect a token [expected] in token stream [tks], or raise an error *)
 let expect tks expected name =
   let tk = Stream.next tks in
   let def, pos = tk in
@@ -49,6 +54,7 @@ let rec last = function
   | [] -> assert false
   | _ :: rest -> last rest
 
+(** Parse a package from token stream [tks] *)
 let parse_pack tks =
   let first, _ = expect_ident tks in
   let parts = ref [first] in
@@ -59,6 +65,7 @@ let parse_pack tks =
   done ;
   !parts
 
+(** Parse the path from token stream [tks] *)
 let parse_path tks =
   let parts = parse_pack tks in
   let name = last parts in
@@ -69,6 +76,7 @@ let parse_path tks =
 
 let local_pack = ref []
 
+(** Parse a type from token stream [tks] *)
 let rec parse_ty tks =
   let rec parse_types delim last =
     match Stream.peek tks with
@@ -94,6 +102,7 @@ let rec parse_ty tks =
   | Some (def, pos) -> raise (Error (mk_one (Unexpected (def, "type")) pos))
   | None -> raise (Failure "unexpected eof parsing type")
 
+(** Parse an expression from token stream [tks] in [kind]*)
 let rec parse_expr kind tks =
   let rec parse_exprs kind tks term sep =
     if next_is tks term then []
@@ -219,12 +228,14 @@ let rec parse_expr kind tks =
   let base = parse_base_expr tks in
   parse_after_expr base tks
 
+(** Expect a constant in token stream [tks] *)
 let expect_const tks =
   let def, pos = Stream.next tks in
   match def with
   | TConst c -> c
   | _ -> raise (Error (mk_one (Unexpected (def, "constant")) pos))
 
+(** Parse attributes in token stream [tks] *)
 let parse_atts tks =
   let atts = Hashtbl.Poly.create () in
   while next_is tks TAt do
@@ -238,6 +249,7 @@ let parse_atts tks =
   done ;
   atts
 
+(* Attemt to parse a member modifier in token stream [tks] *)
 let parse_member_mod tks =
   match Stream.peek tks with
   | Some (TKeyword KVirtual, _) ->
@@ -260,6 +272,7 @@ let parse_member_mod tks =
       Some MPrivate
   | _ -> None
 
+(* Parse member modifiers in token stream [tks] *)
 let rec parse_member_mods tks mods =
   match parse_member_mod tks with
   | Some md ->
@@ -267,6 +280,7 @@ let rec parse_member_mods tks mods =
       parse_member_mods tks mods
   | _ -> ()
 
+(* Parse method parameters *)
 let rec parse_params tks term =
   if next_is tks term then []
   else
@@ -279,6 +293,7 @@ let rec parse_params tks term =
       param :: parse_params tks term
     else [param]
 
+(* Parse struct/class member *)
 let parse_member tks =
   let atts = parse_atts tks in
   let mods : member_mods ref = ref (Set.Poly.of_list []) in
@@ -340,6 +355,7 @@ let parse_member tks =
       , pos )
   | _ -> raise (Error (mk_one (Unexpected (def, "member")) pos))
 
+(** Parse type members in token stream [tks] with terminator [term]*)
 let rec parse_members tks term =
   if next_is tks term then []
   else
@@ -379,6 +395,7 @@ let parse_type_def tks =
       , {pfile= start.pfile; pmin= start.pmin; pmax= last.pmax} )
   | _ -> raise (Error (mk_one (Unexpected (def, "type definition")) start))
 
+(** Parse the module in token stream [tks] *)
 let parse_mod tks =
   let rec parse_imports () =
     match Stream.peek tks with

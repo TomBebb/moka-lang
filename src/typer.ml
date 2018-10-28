@@ -1,3 +1,5 @@
+(** This module is responsible for ensuring type safety in a program as it transforms expressions, values and types into their typed counterparts *)
+
 open Ast
 open Type
 open Core_kernel
@@ -26,6 +28,7 @@ type ty_expr_def =
 
 and ty_expr_meta = {edef: ty_expr_def; ety: ty}
 
+(** Typed expression *)
 and ty_expr = ty_expr_meta span
 
 type ty_member_kind =
@@ -40,6 +43,7 @@ type ty_member_def =
   ; tmty: ty
   ; tmatts: (string, const) Hashtbl.t }
 
+(** Typed type member *)
 type ty_member = ty_member_def span
 
 type ty_type_def_meta =
@@ -108,14 +112,23 @@ let error_msg = function
 
 exception Error of error_kind span
 
+(** The context needed to resolve types in a program *)
 type type_context =
-  { tvars: (string, variability * ty) Hashtbl.t Stack.t
+  { 
+    (** Stack variables' variablity and types *)
+    tvars: (string, variability * ty) Hashtbl.t Stack.t
+    (** Map from type path to type definition used for type resolution *)
   ; ttypedefs: (path, Ast.type_def) Hashtbl.t
+    (** Local this path if in instance member *)
   ; mutable tthis: path option
+    (** True when the type member being parsed is static *)
   ; mutable tin_static: bool
+    (** True when the type member being parsed is a constructor *)
   ; mutable tin_constructor: bool
+    (** True when this type has explicitly returned *)
   ; mutable thas_return: bool }
 
+(** Initialize this typer context with an empty stack, no type definitions, etc.*)
 let init () =
   { tvars= Stack.create ()
   ; ttypedefs= Hashtbl.Poly.create ()
@@ -124,12 +137,16 @@ let init () =
   ; tin_constructor= false
   ; thas_return= false }
 
+(** If [o] has a value return the value if not raise error [err] *)
 let unwrap_or_err o err = match o with Some v -> v | None -> raise err
 
+(** If [tbl] has key [key] then raise [err] *)
 let find_or_err tbl key err = unwrap_or_err (Hashtbl.find tbl key) err
 
+(** Enter a block *)
 let enter_block ctx = Stack.push ctx.tvars (String.Table.create ~size:4 ())
 
+(** Leave a block *)
 let leave_block ctx = Stack.pop ctx.tvars
 
 let rec try_resolve_field ctx ty name pos =
@@ -193,6 +210,7 @@ let find_matching_constr ctx path args pos =
   in
   unwrap_or_err constr (Error (NoMatchingConstr (path, args), pos))
 
+(** Checks whether the type `source` can be casted to `target` *)
 let rec can_cast ctx source target =
   match (source, target) with
   | a, b when is_numeric a && is_numeric b -> true
@@ -206,6 +224,7 @@ let rec can_cast ctx source target =
       | _ -> false )
   | _ -> false
 
+(** Type the expression `ex` and return its typed equivalent *)
 let rec type_expr ctx ex =
   let edef, pos = ex in
   let mk def ty =
@@ -446,6 +465,7 @@ and type_of_const = function
   | CBool _ -> TBool
   | CNull -> TVoid
 
+(** Type a type member into its typed counterpart *)
 let type_member ctx (def, pos) =
   ctx.tin_static <- Set.mem def.mmods MStatic ;
   ctx.tin_constructor <- false ;
@@ -494,6 +514,7 @@ let type_type_def ctx (def, pos) =
     ; temembers= List.map ~f:(type_member ctx) def.emembers }
   , pos )
 
+(** Type this module into its typed counterpart*)
 let type_mod ctx m =
   List.iter
     ~f:(fun (def, pos) ->

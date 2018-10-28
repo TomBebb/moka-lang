@@ -1,3 +1,5 @@
+(** Code generation via LLVM *)
+
 open Llvm
 open Llvm_target
 open Type
@@ -13,34 +15,62 @@ let error_msg = function
 
 exception Error of error_kind span
 
+(** Representation of a class/struct definition during code generatoin*)
 type gen_def_meta =
-  { dstruct: lltype
+  {
+    (** LLVM struct representation of this type *)
+    dstruct: lltype
+    (** Maps field names on this to struct indices so they can be pointed to  *)
   ; dfield_indices: (string, int) Hashtbl.t
+    (** Maps static field names to static values *)
   ; dstatics: (string, llvalue) Hashtbl.t
+    (** Maps method names to methods *)
   ; dmethods: (string, llvalue) Hashtbl.t
+    (** Super class path and index on class struct *)
   ; dsuper: (path * int) option
+    (** The type kind this was generated from *)
   ; dkind: type_def_kind
+    (** Instance field defaults *)
   ; dfield_defaults: (string, llvalue) Hashtbl.t
+    (** Virtual table, if this is a class definition *)
   ; mutable dvtable: llvalue option
+    (** Maps virtual field names to their indices on vtable *)
   ; dvtable_indices: (string, int) Hashtbl.t
+    (** Index of virtual table on struct type *)
   ; dvtable_index: int }
 
+(** Representation of a loop during code generation, so the target blocks of breaks and continues can be resolved *)
 type gen_loop_meta = {lafter: llbasicblock; lstart: llbasicblock}
 
+(** Stores context necessary for code generation *)
 type gen_ctx =
-  { gen_ctx: llcontext
+  { 
+    (** LLVM context *)
+    gen_ctx: llcontext
+    (** Current LLVM module being generated *)
   ; gen_mod: llmodule
+    (** Main function *)
   ; gen_main: llvalue
+    (** Current function being generated *)
   ; mutable gen_func: llvalue
+    (** Instruction builder *)
   ; gen_builder: llbuilder
+    (** Stack variables stored as stack of map from variable name to value *)
   ; gen_vars: (string, llvalue) Hashtbl.t Stack.t
+    (** Current this value *)
   ; mutable gen_this: llvalue option
+    (** Current this type, or void *)
   ; mutable gen_this_ty: lltype
+    (** Local path of this type *)
   ; mutable gen_local_path: path option
+    (** Maps type paths to codegen version of type definition *)
   ; gen_typedefs: (path, gen_def_meta) Hashtbl.Poly.t
+    (** LLVM size_t type *)
   ; gen_size_t: lltype
+    (** Loop metas *)
   ; gen_loops: gen_loop_meta Stack.t }
 
+(** Initialize code-generation context *)
 let init () =
   Llvm_all_backends.initialize () ;
   let ctx = create_context () in
@@ -67,17 +97,21 @@ let init () =
   ; gen_size_t= size_t
   ; gen_loops= Stack.create () }
 
+(** Enter a block *)
 let enter_block ctx = Stack.push ctx.gen_vars (String.Table.create ~size:4 ())
 
+(** Leave a block *)
 let leave_block ctx = Stack.pop ctx.gen_vars
 
 let get err_msg = function None -> raise (Failure err_msg) | Some v -> v
 
+(** Resolve the symbol name of a static type member *)
 let member_name _ path field =
   match Hashtbl.find field.tmatts "LinkName" with
   | Some (CString name) when Set.mem field.tmmods MStatic -> name
   | _ -> s_path path ^ "_" ^ field.tmname
 
+(** Load from a pointer if value given is a pointer and should_load is true  *)
 let maybe_load ctx name v should_load =
   let is_func =
     classify_type (type_of v) = TypeKind.Pointer
@@ -85,6 +119,7 @@ let maybe_load ctx name v should_load =
   in
   if should_load && not is_func then build_load v name ctx.gen_builder else v
 
+(** Generate a LLVM type from the AST type *)
 let rec gen_ty ctx ty =
   match ty with
   | TFunc (args, ret, kind) ->
@@ -111,6 +146,7 @@ let rec gen_ty ctx ty =
       struct_type ctx.gen_ctx (Array.of_list (List.map ~f:(gen_ty ctx) mems))
   | _ -> raise (Failure "This type cannot be generated")
 
+(** Resolve a pointer i.e. keep dereferencing until the innermost element is found, return this*)
 let rec resolve_pointer ctx ptr obj_path =
   let ptr_ty = type_of ptr in
   assert (classify_type ptr_ty = TypeKind.Pointer) ;
@@ -123,6 +159,7 @@ let rec resolve_pointer ctx ptr obj_path =
         (s_path obj_path) ctx.gen_builder
   | _ -> ptr
 
+(** Find the type member called [name] on [obj_ptr] with type path [obj_path] and return a pointer to it *)
 let rec find_member ctx obj_path obj_ptr name =
   let ptr = resolve_pointer ctx obj_ptr obj_path in
   assert (classify_type (element_type (type_of ptr)) = Struct) ;
@@ -136,8 +173,11 @@ let rec find_member ctx obj_path obj_ptr name =
         find_member ctx s super_ptr name
     | _ -> None )
 
+(** Resolve a variable [name] and dereference if [should_load] is set *)
 let find_var ctx name should_load =
   let res = ref None in
+
+  
   Stack.iter ctx.gen_vars ~f:(fun (tbl : (string, llvalue) Hashtbl.t) ->
       match Hashtbl.find tbl name with
       | Some v when !res = None ->
@@ -158,30 +198,38 @@ let find_var ctx name should_load =
            should_load) ) ;
   !res
 
+(** Set the variable called [name] to [value] *)
 let set_var ctx name value =
   let vars = Stack.top_exn ctx.gen_vars in
   ignore (Hashtbl.add vars ~key:name ~data:value)
 
+(** Resolve the method called [name] on object [obj_ptr] with path [path] *)
 let rec find_method ctx path obj_ptr name =
   let meta = Hashtbl.find_exn ctx.gen_typedefs path in
   let ptr = resolve_pointer ctx obj_ptr path in
+  (* assert that obj_ptr is a pointer to a struct as it should be *)
   assert (classify_type (type_of ptr) = Pointer) ;
   assert (classify_type (element_type (type_of ptr)) = Struct) ;
+  (* find the virtual table index of name if any *)
   match Hashtbl.find meta.dvtable_indices name with
   | Some ind ->
       let vtable_ptr_ptr =
         build_struct_gep ptr meta.dvtable_index "vtable_ptr" ctx.gen_builder
       in
+      (* get pointer to vtable *)
       let vtable_ptr =
         ref (build_load vtable_ptr_ptr "vtable" ctx.gen_builder)
       in
+      (* cast to correct type *)
       vtable_ptr :=
         build_pointercast !vtable_ptr
           (type_of (get "no vtable" meta.dvtable))
           "vtable2" ctx.gen_builder ;
+      (* get function pointer of method *)
       let func_ptr =
         ref (build_struct_gep !vtable_ptr ind name ctx.gen_builder)
       in
+      (* resolve pointer until it points to function *)
       while
         classify_type (element_type (type_of !func_ptr)) = TypeKind.Pointer
       do
@@ -189,17 +237,22 @@ let rec find_method ctx path obj_ptr name =
       done ;
       (ptr, !func_ptr)
   | _ -> (
+    (* find the method with name [name] *)
     match Hashtbl.find meta.dmethods name with
     | Some m -> (ptr, m)
     | None -> (
+      (* if this has a super class... *)
       match meta.dsuper with
       | Some (super_path, super_ind) ->
+
           let super_ptr =
             build_struct_gep ptr super_ind "super" ctx.gen_builder
           in
+          (** resolve method on super class *)
           find_method ctx super_path super_ptr name
       | _ -> raise (Failure "method not found") ) )
 
+(** Generate a constant *)
 let gen_const ctx = function
   | CInt i -> Llvm.const_int (gen_ty ctx (TPrim TInt)) i
   | CFloat f -> Llvm.const_float (gen_ty ctx (TPrim TFloat)) f
@@ -214,6 +267,7 @@ let gen_const ctx = function
   | CBool b -> Llvm.const_int (gen_ty ctx (TPrim TBool)) (if b then 1 else 0)
   | CNull -> Llvm.const_pointer_null (void_type ctx.gen_ctx)
 
+(** Allocate type `ty` using libGC / boehm. This makes the object returned garbage-collected. *)
 let gc_malloc ctx ty name =
   let func =
     get "no gc func found" (lookup_function "GC_malloc" ctx.gen_mod)
@@ -222,6 +276,7 @@ let gc_malloc ctx ty name =
   let ptr = build_call func (Array.of_list [size]) "ptr" ctx.gen_builder in
   build_pointercast ptr (pointer_type ty) name ctx.gen_builder
 
+(** Generate defaults on object [ptr] *)
 let rec gen_defaults ctx ptr meta =
   (* make vtable field point to default *)
   let _ =
@@ -253,6 +308,7 @@ let rec gen_defaults ctx ptr meta =
   in
   ()
 
+(** Generate a cast expression on [src] from [src_ty] to [target] *)
 let rec gen_cast ctx (src : llvalue) (src_ty : ty) (target : ty) =
   match (src_ty, target) with
   | a, b when a = b -> src
@@ -284,6 +340,7 @@ let rec gen_cast ctx (src : llvalue) (src_ty : ty) (target : ty) =
       raise
         (Failure (sprintf "Cannot cast %s to %s" (s_ty src_ty) (s_ty target)))
 
+(** Generate a LLVM value from the typed AST expr given *)
 let rec gen_expr (ctx : gen_ctx) ((def, pos) : ty_expr) : llvalue =
   let rec gen_expr_lhs ctx (def, pos) =
     match def.edef with
@@ -519,6 +576,7 @@ let rec gen_expr (ctx : gen_ctx) ((def, pos) : ty_expr) : llvalue =
       let v = gen_expr ctx v in
       build_ret v ctx.gen_builder
 
+(** Generate type declarations and minimal structures needed to use struct fields etc. *)
 let pre_gen_typedef ctx (meta, _) =
   let meta : ty_type_def_meta = meta in
   let types = ref [] in
@@ -673,6 +731,7 @@ let pre_gen_typedef ctx (meta, _) =
   in
   dmeta.dvtable <- Some vtable_ptr
 
+(** Generate type definition *)
 let gen_typedef ctx (meta, _) =
   ctx.gen_local_path <- Some meta.tepath ;
   let meta_meta = Hashtbl.find_exn ctx.gen_typedefs meta.tepath in
@@ -754,11 +813,14 @@ let gen_typedef ctx (meta, _) =
     meta.temembers ;
   ()
 
+(** Pre-generate the module [tm]*)
 let pre_gen_mod ctx tm =
   List.iter ~f:(fun def -> ignore (pre_gen_typedef ctx def)) tm.tmdefs
 
+(** Generate the module [tm]*)
 let gen_mod ctx tm = List.iter ~f:(gen_typedef ctx) tm.tmdefs
 
+(** Optimize the module with optimization-level [opt_level] *)
 let optimize ctx opt_level =
   print_endline "Optimizing" ;
   let pmb = Llvm_passmgr_builder.create () in
@@ -768,6 +830,7 @@ let optimize ctx opt_level =
   Llvm_passmgr_builder.populate_module_pass_manager pm pmb ;
   ignore (PassManager.run_module ctx.gen_mod pm)
 
+(** Build the object file from the module with the optimization-level [opt_level] *)
 let build ctx output_file opt_level =
   optimize ctx opt_level ;
   Llvm.dump_module ctx.gen_mod ;
@@ -776,7 +839,7 @@ let build ctx output_file opt_level =
   let target_mach = TargetMachine.create ~triple target in
   let object_file = output_file ^ ".o" in
   if Sys.file_exists object_file then
-    raise (Failure "object file already exists!") ;
+    Sys.remove object_file;
   TargetMachine.emit_to_file ctx.gen_mod CodeGenFileType.ObjectFile object_file
     target_mach ;
   if Sys.command (sprintf "clang -o %s %s -lgc" output_file object_file) = 1

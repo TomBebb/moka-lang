@@ -1,3 +1,5 @@
+(** Type representations *)
+
 type pack = string list
 
 type path = pack * string

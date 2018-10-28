@@ -1,3 +1,4 @@
+(** Basic lexer. Transforms source code into stream of tokens *)
 open Ast
 open Token
 open Type
@@ -150,6 +151,7 @@ and string1 strbuf buf =
       string1 strbuf buf
   | _ -> raise (Failure "failed to lex string")
 
+(** Read from the source file [file] a stream of tokens *)
 let lex_stream file =
   curr := init_cursor file ;
   let ch = In_channel.create ~binary:false file in

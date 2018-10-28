@@ -1,6 +1,7 @@
+(** Abstract Syntax Tree representation of constants, values, types, and expressions *)
+
 open Type
 open Core_kernel
-
 type const =
   | CInt of int
   | CFloat of float

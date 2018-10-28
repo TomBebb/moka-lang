@@ -1,6 +1,9 @@
+(** Token defintions *)
+
 open Ast
 open Type
 
+(** A built-in keyword that has special meaning in parsing *)
 type keyword =
   (* type def *)
   | KClass
@@ -37,6 +40,7 @@ type keyword =
   | KThis
   | KNull
 
+(** Token definitions  *)
 type token =
   | TKeyword of keyword
   | TIdent of string
